@@ -1,0 +1,235 @@
+# Singalong AI: Architectural Review & Roadmap Request
+1. ##Project Context & Vision
+I am building an automated + human-in-the-loop CLI and web tool (`singalong`) designed to turn music tracks (primarily Chinese gacha/game OSTs like *Wuthering Waves*, *Genshin Impact*, *Honkai: Star Rail*, etc., and anime music) into professional sing-along / karaoke videos for YouTube.
+The target output is a 1080p/4K 60fps video with:
+- Syllable-by-syllable, progressive left-to-right color-fill wiping (`\kf`).
+- 3-tiered synchronized subtitles stacked vertically:
+1. US-English phonetic respelling (for non-Chinese speakers).
+  2. Pinyin with proper tone marks.
+  3. Official Chinese characters (Hanzi).
+- Automatic handling of call-and-response vocals (lead singer centered, backing choir positioned off to the side with distinct color/italics).
+- Output rendered on either a clean black canvas or burned directly over gameplay/scenic video backgrounds.
+Hardware Environment: Local Linux machine with an NVIDIA GeForce RTX 4090 (24GB VRAM) and system FFmpeg with `libass` and `nvenc`.
+---
+## 2. What Is Currently Built & Working
+### Pipeline 1: Extraction & Alignment (`singalong.py`)
+1. **Audio Download**: `yt-dlp` extracts high-quality audio (`.wav`) from a YouTube URL.
+2. **Vocal Stem Separation**: `demucs` (`htdemucs`) isolates `vocals.wav`.
+3. **Official Lyrics Fetching**: Queries NetEase Cloud Music's public unauthenticated API (`cloudsearch` + `lyric` endpoint) to obtain 100% studio-official Hanzi lyrics with synchronized `.lrc` line timestamps.
+4. **Acoustic Stopwatch via FunASR**: FunASR's `paraformer-zh` model runs on CUDA to produce acoustic token timestamps.
+5. **Hybrid Marrying & Hallucination Dropping**:
+   - Rather than letting ASR guess words (which causes homophone typos like 云深林 instead of 玄翎), or relying only on line-level LRC timestamps (which lack syllable timings and breath pauses):
+   - NetEase provides the ground-truth text and line boundaries, while Paraformer acts as the acoustic stopwatch.
+   - Intro noise hallucinations (e.g. `对的对的好的` at 0.01s) are dropped by bounding tokens to the first LRC line.
+   - Mid-line breath pauses (e.g. 3-second pause between `玄翎飞` and `飞过江`) are preserved by clustering acoustic tokens across silence gaps.
+6. **Call-and-Response Parsing**:
+   - Parentheticals `（...）` in NetEase lyrics are parsed to separate lead vocals from choir responses, flagging `"is_backing": true/false` in the JSON.
+7. **Phonetics Generation**: `pypinyin` produces tone-marked Pinyin, and a phonetic respelling engine generates US-English approximations (e.g. `shywen-leeng-fay`).
+8. **Outputs**: Produces `<video_id>.json` (millisecond per-token timings) and `<video_id>.txt` (human inspection preview).
+### Pipeline 2: Parameterized Video Renderer (`colorfill.py`)
+1. **Configuration**: Driven by `config.json` (typography, font size, stroke outline, colors for unfilled/filled text, margins, and placement).
+2. **Backing Placement**: Automatically places lead vocals at `bottom-center` in Gold (`#FFD700`) and backing vocals at `bottom-right` in Cyan (`#70D6FF`), scaled and italicized.
+3. **Hardware Acceleration**: Generates an Advanced SubStation Alpha (`.ass`) file with `\kf` karaoke wipe tags and burns it into video via FFmpeg using `libass` and `h264_nvenc` on the RTX 4090 (~480 fps render speed).
+---
+## 3. The Problem Spaces Where We Need Your Architectural Guidance
+### Problem A: Automated Pre-Render QA / Linting
+While many lines are 100% perfect, complex musical passages (fast vibrato, heavily layered choirs, or sudden tempo changes) can occasionally cause syllable timing drift.
+- What mathematical or heuristic checks can we run on the `<video_id>.json` data *before* rendering to detect potential anomalies?
+- (e.g., syllable density anomalies, token duration outliers, overlap conflicts, acoustic silence fallback detection).
+### Problem B: The Interactive Browser-Based Editor (`editor.py`)
+To achieve professional sing-along quality, we want a lightweight, zero-bloat local web editor to inspect and nudge timings in 1–2 minutes per song:
+- **Audio/Visual playback**: HTML5 audio/waveform playing `<video_id>.wav` with live CSS/SVG color-fill preview.
+- **Timing Adjustment**: Ability to click or drag syllable marks along the timeline (or a "tap-along" rhythm mode) to nudge boundaries where the AI drifted.
+- **Segment Deletion / Strikethrough**: Clicking an unwanted response/filler segment to cross it out (deleting it from the JSON upon save).
+- **Call-and-Response Tagging**: Ability to select words and toggle "Wrap in ( )" to designate them as backing vocals.
+- **One-Click Workflow**: Save back to `<video_id>.json` and hit `[Render Video]` directly from the UI.
+### Problem C: Vocal Separation Evolution (Lead vs. Backing Stems)
+Currently, standard Demucs isolates vocals as a single stem. However, open-weights models like BS-Roformer or MelBandRoformer-Karaoke can split `lead_vocals.wav` and `backing_vocals.wav`.
+- How should we architect the ingestion of dedicated lead vs. backing stems into our alignment model to minimize choral interference on the lead timeline?
+### Problem D: Non-NetEase Fallbacks & Generalization
+Not all songs exist on NetEase Cloud Music with synchronized `.lrc` files (e.g. indie tracks, western covers, or newly released songs).
+- When NetEase lyrics are missing, how should the pipeline cleanly fall back (e.g. Genius romanized lyrics + local Qwen 2.5 14B Pinyin-to-Hanzi translation, or unconstrained ASR + forced alignment)?
+---
+## 4. Your Task & Deliverables
+Please review the architecture and design described above, and provide:
+1. **Critical Architectural Assessment**:
+   - Identify potential flaws, edge cases, or performance bottlenecks in our current hybrid approach (NetEase LRC + FunASR acoustic tokens + ASS/FFmpeg).
+2. **Probing Clarification Questions**:
+   - What key design decisions, trade-offs, or UI/UX choices should we make before building the editor and QA system?
+3. **Pre-Render Linter Specification**:
+   - Provide concrete heuristic rules and metrics for flagging "suspicious" lines.
+4. **Web Editor Technical Blueprint**:
+   - Recommend the cleanest, most maintainable architecture for `editor.py` (frontend tech, audio scrubbing/waveform library, backend API structure, data state management).
+5. **Phased Execution Plan**:
+   - Break down the next steps into logical, incremental milestones that can be implemented cleanly.
+
+
+The hybrid architecture—using NetEase `.lrc` lines as deterministic semantic boundaries and FunASR (`paraformer-zh`) as a purely acoustic stopwatch—solves the hardest problem in Chinese music transcription: homophone hallucination during melismatic singing. Combined with `libass` and `h264_nvenc` on an RTX 4090, your render pipeline is already operating near the hardware ceiling.
+
+Moving from a promising prototype to a zero-friction production tool requires addressing several underlying alignment, typography, and frontend state challenges.
+
+---
+
+## 1. Critical Architectural Assessment
+
+### A. The "Count Mismatch" Problem in Hybrid Marrying
+
+Using `paraformer-zh` purely as an acoustic stopwatch works well when the number of emitted acoustic tokens in a window equals the number of Hanzi characters in the NetEase line ($N_{\text{ASR}} = N_{\text{Hanzi}}$). However, singing introduces two major failure modes:
+
+* **Melisma (Vowel Extension):** A singer holds one character (e.g., `啊` or `飞`) across three pitch changes. Paraformer often emits 2–3 tokens (or repeats vowel tokens) for a single character, causing $N_{\text{ASR}}$ to be greater than $N_{\text{Hanzi}}$ and shifting subsequent syllable timings rightward.
+* **Elision & Fast Rap:** In rapid passages, Paraformer may merge two adjacent syllables with similar formants into a single acoustic token ($N_{\text{ASR}}$ less than $N_{\text{Hanzi}}$).
+* **The Fix:** Replace index-based token marrying with **Phoneme-Level Dynamic Time Warping (DTW)** or **CTC Forced Alignment**. Convert both the NetEase ground-truth Hanzi and the Paraformer output into Pinyin initials/finals, run a Needleman-Wunsch alignment or CTC trellis within the LRC line boundaries, and map the acoustic timestamps back to the ground-truth characters.
+
+### B. `libass` Vertical Stacking & Horizontal Drift
+
+In standard `.ass` subtitles, a `\kf` tag sweeps across a text line at a constant pixel-per-centisecond rate. If you stack three lines (US Phonetics, Pinyin, Hanzi) as three separate `Dialogue:` events with identical `\kf` durations, **their visual wipe heads will desynchronize horizontally**.
+
+* **Why:** `玄` (1 character, ~45px wide) vs. `xuán` (4 characters, ~70px wide) vs. `shywen` (6 characters, ~105px wide). While each individual syllable finishes at the exact same millisecond, the *overall width* of the three lines differs, so the vertical alignment of each syllable's wipe point shifts across the screen.
+* **The Fix:** Instead of rendering three long lines, calculate the bounding-box width of the widest tier (usually US Phonetics) for each syllable, and use **per-syllable `\pos(x,y)` absolute positioning** or invisible padding spaces (`\h`) so that every syllable forms a strict vertical column (a "Ruby text" grid).
+
+### C. Polyphonic Characters (多音字) in `pypinyin`
+
+`pypinyin` defaults to modern standard speech frequencies, which frequently mispronounces classical or poetic Chinese lyrics common in *Wuthering Waves* and *Honkai: Star Rail* OSTs:
+
+* **Classical/Lyrical Readings:** `长安` (`cháng` vs `zhǎng`), `叶` (`yè` vs `xié` in poetic rhymes), `行` (`xíng` vs `háng`), `血` (`xuè` vs `xiě`), or `骑` (`qí` vs `jì`).
+* **Tone Sandhi:** Decide early whether your Pinyin tier displays **lexical tones** (`bù shì`, `yī gè`) or **sung/sandhi tones** (`bú shì`, `yí gè`). Standard practice for learners and singers is lexical tone marks on Pinyin, but phonetic respelling reflecting actual pronunciation.
+
+### D. NVENC Chroma Subsampling on Colored Text
+
+Burning Cyan (`#70D6FF`) and Gold (`#FFD700`) text with thin strokes onto a dark background using standard `h264_nvenc` (`yuv420p`) causes noticeable **4:2:0 chroma bleed**, making thin phonetic text look blurry or pixelated on YouTube.
+
+* **The Fix:** Ensure `libass` renders in full RGB or `yuv444p` before the final scale, and add a minimum `2.5px–3px` hard black outline (`\bord3\shad0`) so high-contrast luminance edges protect the color fill from chroma subsampling artifacts.
+
+---
+
+## 2. Probing Clarification Questions
+
+Before finalizing the schemas for the linter and building the web editor, consider these five architectural decisions:
+
+1. **Multi-Tier Ruby Alignment Strategy:** In `colorfill.py`, are you currently emitting 3 separate `Dialogue:` lines per phrase with standard `\kf` tags, or are you already calculating column widths so each Hanzi sits directly underneath its Pinyin and English phonetic equivalent?
+2. **Simultaneous vs. Sequential Call-and-Response:** In NetEase `.lrc` files, parenthetical backing vocals `（...）` are placed inline at the end of the text string, even when the choir sings *simultaneously* over the lead singer's held final note. Should the editor treat backing vocals as an **independent parallel track** (allowing overlap with the lead), or strictly sequential segments within the same line?
+3. **Phonetic Dictionary Customizability:** When you edit a Pinyin or English phonetic typo in the web UI (e.g., fixing a polyphonic character), should that correction only apply to `<video_id>.json`, or also write back to a persistent local `custom_dict.json` so the pipeline remembers that word in future songs?
+4. **Video Background Sync in the Editor:** Does the web editor only need to play the audio waveform (`vocals.wav` / `full_mix.wav`), or do you also need a synchronized `<video>` element in the editor to ensure subtitle placement doesn't collide with in-game UI/cutscene elements?
+5. **Preferred Stack for `editor.py`:** Would you prefer a **zero-build single-file architecture** (FastAPI + Vanilla JS/SolidJS via ESM CDN) that launches instantly with `python editor.py`, or a structured Vite + TypeScript + SolidJS frontend compiled into static assets?
+
+---
+
+## 3. Pre-Render Linter Specification (`lint.py`)
+
+Run these five mathematical and heuristic checks on `<video_id>.json` immediately after Pipeline 1 finishes. Each token $i$ in line $L$ has start time $t_{i,\text{start}}$, end time $t_{i,\text{end}}$, and duration $d_i = t_{i,\text{end}} - t_{i,\text{start}}$.
+
+| Rule ID | Metric / Formula | Threshold | What It Catches |
+| --- | --- | --- | --- |
+| **`ERR_COUNT_MISMATCH`** | $\Vert{}N_{\text{Hanzi}} - N_{\text{ASR\_tokens}}\Vert{} > 0$ | Exact mismatch | Melisma splitting a syllable into 2 tokens, or rapid articulation dropping a syllable. |
+| **`WARN_MICRO_SYLLABLE`** | $d_i < 60\text{ ms}$ | Less than $60\text{ ms}$ | Forced-alignment squish where 3+ characters got crammed into a tiny acoustic transition. |
+| **`WARN_RUNAWAY_HOLD`** | $d_i > 2500\text{ ms}$ AND $\text{RMS}(t_{i,\text{start}} + 800\text{ms} \dots t_{i,\text{end}}) < -42\text{ dBFS}$ | Greater than $2.5\text{ s}$ with low tail energy | Unbounded final token stretching across an instrumental break until the next LRC line starts. |
+| **`WARN_UNIFORM_FALLBACK`** | $\sigma(d_1, d_2, \dots, d_n) < 5\text{ ms}$ for $n \ge 4$ | StdDev less than $5\text{ ms}$ | Alignment failure where the code fell back to dividing the line duration equally ($D_{\text{line}} / n$). |
+| **`WARN_SILENCE_GHOST`** | $\text{MeanRMS}_{\text{vocals.wav}}(t_{i,\text{start}}, t_{i,\text{end}}) < -45\text{ dBFS}$ | Less than $-45\text{ dBFS}$ | Token placed inside an instrumental breath pause or hallucinated on reverb tail. |
+| **`ERR_LINE_BOUNDARY_BLEED`** | $t_{n,\text{end}}(L_k) > t_{1,\text{start}}(L_{k+1})$ (same vocal track) | Overlap greater than $0\text{ ms}$ | Lead vocal line overlapping the next lead vocal line, causing `libass` vertical collision jumping. |
+
+### Composite Line Confidence Score
+
+Assign every line a confidence score $C_L \in [0, 100]$ so the web editor can sort or highlight problem lines in red/amber:
+
+$$C_L = 100 - \left( 40 \cdot \mathbb{I}_{\text{mismatch}} + 15 \cdot N_{\text{micro}} + 20 \cdot N_{\text{ghost}} + 25 \cdot \mathbb{I}_{\text{uniform}} \right)$$
+
+Any line with $C_L < 80$ is automatically flagged in the CLI output and added to a "Jump to Next Issue" queue in the web editor.
+
+---
+
+## 4. Web Editor Technical Blueprint (`editor.py`)
+
+To hit your goal of fixing a song in **1–2 minutes**, mouse dragging alone is too slow. The editor should be built around **keyboard-driven rhythm tapping** and **dual-stem waveform scrubbing**.
+
+### Recommended Stack
+
+* **Backend:** **FastAPI** (`uvicorn`) inside `editor.py`. Supports `Range` HTTP headers out of the box (mandatory for instant HTML5 audio seeking without waiting for full `.wav` buffered loads) and Server-Sent Events (SSE) to stream FFmpeg render progress back to the browser.
+* **Frontend Reactivity:** **SolidJS** (or Vanilla JS with fine-grained signals). Why: When scrubbing audio at 60fps, fine-grained reactivity updates the CSS `--wipe-progress` variable on the active syllable DOM node directly without triggering virtual DOM diffing across hundreds of lyric tokens.
+* **Waveform Engine:** **`wavesurfer.js` (v7)** with the **Regions Plugin**.
+* Load `vocals.wav` as the visual waveform (so syllable onsets and breath gaps are visually obvious as spikes), while syncing playback with `original_mix.wav` via a quick mute/solo toggle (`V` key).
+* Render each syllable as a colored Wavesurfer Region on the timeline. Dragging a region boundary immediately mutates the syllable's start/end ms.
+
+
+
+### High-Speed UX Workflows (The 1-Minute Fix)
+
+1. **Live CSS `\kf` Preview:**
+Render the 3-tier lyrics above the waveform using the exact fonts from `config.json`. Bind each syllable's fill state to `background: linear-gradient(90deg, #FFD700 var(--fill), #FFFFFF var(--fill))` with `-webkit-background-clip: text`. You see the exact karaoke wipe in real time without running FFmpeg.
+2. **"Tap-Along" Re-Timing Mode (`T` Key):**
+When a fast line is drifted, select the line, press `T`, and the audio plays at `0.75x` speed from 2 seconds before the line. Tap the **`Spacebar`** on the onset of each syllable. Your keypress timestamps overwrite `start_ms` for each token sequentially, using acoustic energy drop-offs to auto-cap the final token.
+3. **One-Click Modifiers:**
+* **`Alt + Click` on a syllable:** Toggles `"is_deleted": true` (renders with red strikethrough; omitted from `.ass` generation).
+* **`B` Key (with text/region selected):** Toggles `"is_backing": true` on the selected tokens, immediately moving them to the Cyan backing track lane in the preview.
+* **`Double-Click` on Pinyin/Phonetics:** Opens an inline `<input>` to override a polyphonic reading without touching timings.
+
+
+
+### Backend API Endpoints (`editor.py`)
+
+* `GET /api/project/<video_id>` — Returns `<video_id>.json`, `config.json`, and linter warnings.
+* `GET /api/audio/<video_id>/<stem>` — Streams `original.wav` or `vocals.wav` with `Accept-Ranges: bytes`.
+* `POST /api/project/<video_id>/save` — Atomically writes updated JSON (creating a `.bak` snapshot first) and re-runs the linter.
+* `POST /api/project/<video_id>/render` — Spawns `colorfill.py` + `ffmpeg` subprocess and streams FPS/progress via SSE.
+
+---
+
+## 5. Solving Problem C & Problem D
+
+### Problem C: Dual-Stem Ingestion (Lead vs. Backing Vocals)
+
+Using `audio-separator` (which wraps UVR MDX-Net and Roformer models in Python) on your RTX 4090 takes ~8–12 seconds per song and dramatically improves alignment accuracy on choral tracks:
+
+1. **Stage 1 (Vocal Isolation):** Run `Kim_Vocal_2` or `BS-Roformer-Viperx-1297` on the raw mix to extract a cleaner `vocals_all.wav` than `htdemucs`.
+2. **Stage 2 (Karaoke/Backing Split):** Run `mel_band_roformer_karaoke_aufr33_viperx` on `vocals_all.wav`. This yields:
+* `lead_vocals.wav` (dry center lead)
+* `backing_vocals.wav` (harmonies, choir, call-and-response)
+
+
+3. **Dual-Track FunASR Alignment:**
+* Parse the NetEase line first: strip parentheticals `（...）` into a `backing_text` buffer and keep the main text in `lead_text`.
+* Run FunASR alignment for `lead_text` against **`lead_vocals.wav`**. Because the choir is stripped out, Paraformer won't prematurely trigger or stretch lead tokens over backing vocals.
+* Run FunASR alignment for `backing_text` against **`backing_vocals.wav`** within the window $[t_{\text{line\_start}}, t_{\text{next\_line\_start}} + 1500\text{ms}]$. This allows backing vocals to overlap naturally with the lead singer's held notes!
+
+
+
+### Problem D: Non-NetEase Fallbacks & Generalization
+
+Build a **4-Tier Waterfall Resolver** for lyrics acquisition:
+
+1. **Tier 1: Multi-Provider LRC Search:** If NetEase misses, query **QQ Music API** (`y.qq.com`) and **LRCLIB** (`lrclib.net` API). QQ Music actually has native **character-by-character `.qrc` (QRC) XML timestamps** for many Chinese game OSTs, which can serve as ground-truth timing or a high-precision reference.
+2. **Tier 2: Unsynchronized Official Hanzi (Genius / HoYoWiki / KuroWiki / Video Description):**
+If you have the raw Hanzi text without timestamps:
+* Run **WhisperX (`large-v3`)** or **SenseVoice** on `lead_vocals.wav` to get coarse phrase-level segments.
+* Use dynamic programming (Levenshtein fuzzy matching in Pinyin space) to anchor your ground-truth Hanzi lines to the ASR segments, then run your existing FunASR token alignment inside each anchored line.
+
+
+3. **Tier 3: Romanized/Pinyin Only -> Hanzi Reconstruction:**
+Avoid translating Pinyin to Hanzi without acoustic context—even Qwen 2.5 14B will guess wrong on poetic homophones if given only Pinyin. Instead, feed a **dual prompt** to a local LLM: pass *both* the Genius Pinyin AND the noisy `paraformer-zh` / `Whisper` Hanzi transcript. The ASR provides the exact acoustic homophone candidates, and the Pinyin locks the phonetic readings.
+4. **Tier 4: Zero-Lyric Cold Start:**
+Run `Whisper large-v3` (for punctuation and line segmentation) + `paraformer-zh` (for syllable timing), flag the entire file as `"source": "asr_unverified"` so the linter highlights low-probability bigrams for quick human review in `editor.py`.
+
+---
+
+## 6. Phased Execution Plan
+
+### Phase 1: Alignment Hardening & Pre-Render Linter (1–2 Days)
+
+* Implement the `lint.py` heuristics (`ERR_COUNT_MISMATCH`, `WARN_RUNAWAY_HOLD`, `WARN_SILENCE_GHOST`) using `numpy` RMS energy checks on `vocals.wav`.
+* Upgrade `singalong.py`'s hybrid marrying logic from simple token indexing to Pinyin-level Needleman-Wunsch / DTW alignment so melismas and dropped syllables don't cascade across a line.
+* Fix vertical Ruby alignment in `colorfill.py` so the 3 stacked tiers align per-syllable or per-phrase cleanly.
+
+### Phase 2: Dual-Stem Vocal Separation Upgrade (1 Day)
+
+* Replace or augment `htdemucs` with `audio-separator` (`BS-Roformer` + `MelBandRoformer-Karaoke`).
+* Route non-parenthetical text to `lead_vocals.wav` and parenthetical `（...）` text to `backing_vocals.wav`, enabling true overlapping call-and-response subtitles.
+
+### Phase 3: `editor.py` FastAPI + Wavesurfer MVP (2–3 Days)
+
+* Build the local FastAPI server with byte-range audio streaming and JSON load/save endpoints.
+* Integrate `wavesurfer.js` with syllable regions, linter warning badges, live CSS gradient `\kf` preview, and the Spacebar "Tap-Along" retiming mode.
+* Wire the `[Render Video]` button to trigger `colorfill.py` via SSE.
+
+### Phase 4: Waterfall Lyric Resolver (1–2 Days)
+
+* Add QQ Music / LRCLIB fallback scrapers.
+* Implement the unsynchronized raw-text forced alignment path for tracks that only have plain text lyrics in the YouTube description or wiki.

@@ -1,0 +1,58 @@
+{
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "background_color": "black"
+  },
+  "subtitles": {
+    "font_name": "Source Han Sans CN",
+    "position": {
+      "alignment": "bottom-center",
+      "margin_bottom": 100,
+      "line_spacing": 20
+    },
+    "hanzi": {
+      "enabled": true,
+      "font_size": 64,
+      "color_unfilled": "#FFFFFF",
+      "color_filled": "#FFD700",
+      "color_outline": "#000000",
+      "outline_width": 3,
+      "shadow": 2,
+      "bold": true
+    },
+    "pinyin": {
+      "enabled": true,
+      "font_size": 32,
+      "color_unfilled": "#E0E0E0",
+      "color_filled": "#FFD700",
+      "color_outline": "#000000",
+      "outline_width": 2,
+      "shadow": 1,
+      "bold": false
+    },
+    "english": {
+      "enabled": true,
+      "font_size": 28,
+      "color_unfilled": "#B0B0B0",
+      "color_filled": "#FFD700",
+      "color_outline": "#000000",
+      "outline_width": 2,
+      "shadow": 1,
+      "bold": false
+    },
+    "backing": {
+      "placement": "bottom-right",
+      "margin_right": 80,
+      "margin_bottom": 120,
+      "font_scale": 0.85,
+      "italic": true,
+      "color_filled": "#70D6FF",
+      "color_unfilled": "#D0E8FF",
+      "color_outline": "#000000",
+      "prefix": "( ",
+      "suffix": " )"
+    }
+  }
+}

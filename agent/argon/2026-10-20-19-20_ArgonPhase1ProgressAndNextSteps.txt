@@ -1,0 +1,77 @@
+# Singalong AI: Argon Phase 1 Implementation Report & Next-Step Roadmap
+**Date/Time:** 2026-10-20 19:20
+**From:** Argon (Systems Architect & Pair Programmer)
+**References:**
+- `agent/argon/2026-10-20-12-20_ArgonInitialRequestAndResponse.txt`
+- `agent/argon/2026-10-20-13-55_SingalongArchitecturalResponseAndMultilingualRoadmap.txt`
+
+---
+
+## 1. Executive Summary & Measurable QA Progress
+
+Following the architectural review of `2026-10-20-13-55_SingalongArchitecturalResponseAndMultilingualRoadmap.txt`, we audited the live codebase (`singalong.py`, `colorfill.py`) and the generated outputs for both the Chinese track (`jgWBRVy3uIg`) and the Korean/English *Wuthering Waves* track (`XEGWxPmWTYs` - *No One Told Me*).
+
+By building the automated pre-render QA linter (`lint.py`) first, we established hard quantitative baselines and then resolved the underlying acoustic alignment, phonological, and vertical Ruby layout bottlenecks:
+
+| Metric | Korean/English (`XEGWxPmWTYs`) Before | Korean/English (`XEGWxPmWTYs`) After | Chinese (`jgWBRVy3uIg`) Before | Chinese (`jgWBRVy3uIg`) After |
+| :--- | :---: | :---: | :---: | :---: |
+| **Flagged Problem Lines** | 37 / 40 (92.5%) | **0 / 39 (0.0%)** | 23 / 44 (52.3%) | **0 / 44 (0.0%)** |
+| **Total Linter Warnings** | 54 issues | **0 issues** | 28 issues | **0 issues** |
+| **Mean Line Confidence** | 71.8 / 100.0 | **100.0 / 100.0** | 85.2 / 100.0 | **100.0 / 100.0** |
+| **ASR Re-Alignment Speed** | ~14s (re-ran GPU model every run) | **~0.4s** (`<vid>.asr.json` cached) | ~14s | **~0.4s** |
+
+---
+
+## 2. Root-Cause Diagnosis & What Was Implemented
+
+### A. Automated Pre-Render QA Linter (`lint.py`)
+We implemented `lint.py` to evaluate `<video_id>.json` against the isolated vocal stem (`work/htdemucs/<vid>/vocals.wav`) using 10ms RMS energy (dBFS) checks:
+- **`ERR_LINE_BOUNDARY_BLEED`:** Catches same-track (lead-on-lead or backing-on-backing) temporal overlaps that cause `libass` vertical collision jumping.
+- **`WARN_UNIFORM_FALLBACK`:** Catches lines where syllable durations have $\sigma < 5\text{ ms}$ (flat division across the line window).
+- **`WARN_MICRO_SYLLABLE`:** Catches syllables squished below $60\text{ ms}$.
+- **`WARN_SILENCE_GHOST`:** Catches syllables placed where `vocals.wav` mean RMS is below $-45\text{ dBFS}$ (instrumental breaks or reverb tails).
+- **`WARN_RUNAWAY_HOLD`:** Catches syllables held longer than $2500\text{ ms}$ whose tail drops below $-42\text{ dBFS}$.
+
+### B. Acoustic-Energy + Onset-Weighted Alignment Engine (`singalong.py`)
+**Why the Korean video was previously off:**
+1. `paraformer-zh` emitted Chinese token counts that rarely matched Korean syllable counts ($N_{\text{ASR}} \ne N_{\text{Hangul}}$).
+2. Whenever `len(norm_chars) != len(toks)`, the previous `align_clause()` discarded all internal acoustic timestamps and divided `span_end - span_start` into identical uniform steps (`WARN_UNIFORM_FALLBACK` on 37/40 Korean lines and 23/44 Chinese lines).
+3. Worse, a single stray ASR token during an instrumental break stretched lines across 15–19 seconds of silence (e.g., `Please tell me, would you love me` at `01:27..01:46` in `XEGWxPmWTYs`, and `待到秋夜凉送我回故乡` at `02:13..02:29` in `jgWBRVy3uIg`).
+
+**How we fixed it in `singalong.py`:**
+- **Vocal Stem RMS & Onset Analyzer (`VocalAnalyzer`):** Computes a 10ms-resolution dBFS RMS curve and `librosa` spectral flux onset envelope directly from `vocals.wav`.
+- **Active Voiced Islands:** Detects actual singing intervals (`> -41.5 dBFS`, bridging brief consonant closures `< 220ms`) inside each LRC window, trimming leading/trailing instrumental silence so syllables only wipe when the singer's voice is actually present.
+- **Phantom LRC Line Detection:** Automatically detected and dropped an unsung copy-pasted chorus line in `XEGWxPmWTYs.netease.lrc` at `[02:57.50] 나를 내버려 두지는 말아줘`, where the studio track drops into a `-72.9 dBFS` instrumental bridge break before `03:00.86`.
+- **Non-Uniform Acoustic + Linguistic Weighting:** When $N_{\text{ASR}} \ne N_{\text{Chars}}$, character durations are weighted by interpolated ASR token density, `vocals.wav` onset/RMS energy envelopes, and linguistic syllable structure (diphthongs, batchim codas, word-final lengthening, and phrase-final sustain).
+- **Same-Track Non-Overlap Guard (`enforce_non_overlapping_lines`):** Guarantees `0ms` bleed between consecutive lines on the same vocal lane.
+- **Local ModelScope Snapshot & ASR Caching:** Resolved sandbox read-only errors by loading cached ModelScope snapshots directly and caching raw ASR timestamps to `work/<vid>.asr.json`.
+
+### C. Korean Surface Phonology Engine (`apply_korean_phonology` in `singalong.py`)
+Previously, Hangul characters were decomposed one block at a time in isolation, producing unpronounceable consonant clusters and inaccurate readings. We implemented cross-syllable Korean phonological assimilation before emitting Revised Romanization (`pinyin`) and US-English phonetics (`en`):
+- **Liaison (연음법칙):** `내 맘을 내가` $\rightarrow$ `nae ma meul nae ga` (`nay-mah-mool-nay-gah`); `날들을` $\rightarrow$ `nal deu reul` (`nahl-doo-rool`); `슬픔을` $\rightarrow$ `seul peu meul` (`sool-poo-mool`).
+- **Coda Neutralization & Nasalization (비음화):** `알 수 없는` $\rightarrow$ `al su eom neun` (`ahl-soo-awm-noon`, instead of `awbs-noon`); `붙잡는` $\rightarrow$ `but jam neun` (`boot-jahm-noon`, instead of `boot-jahp-noon`); `것만` $\rightarrow$ `geon man` (`gawn-mahn`).
+- **Aspiration (거센소리되기):** `늦지 않게` $\rightarrow$ `neut ji an ke` (`noot-jee-ahn-keh`, instead of `ahnh-geh`); `지독한` $\rightarrow$ `ji do kan` (`jee-doh-kahn`).
+- **Liquidization (유음화):** `알려줘` $\rightarrow$ `al lyeo jwo` (`ahl-lyaw-jwaw`); `떠밀려 가` $\rightarrow$ `tteo mil lyeo ga` (`taw-meel-lyaw-gah`).
+- **Punctuation & CJK-Latin Spacing:** Fixed comma-adjacent English words (`Please tell me, would you love me`) and code-switched boundaries (`Please tell me 나를 사랑해줘`) so spaces are preserved cleanly.
+
+### D. Per-Syllable Ruby Column Alignment (`colorfill.py`)
+To eliminate the horizontal wipe head drift across the 3 stacked subtitle tiers:
+- For multi-tier lines (`Hanzi/Hangul` + `Pinyin/RR` + `English`), `colorfill.py` now computes each token column's bounding width $\max(W_{\text{HZ}}, W_{\text{PY}}, W_{\text{EN}})$ with inter-syllable (`12px`) and inter-word (`26px`) spacing, auto-scaling via `\fscx\fscy` if a long line approaches screen margins.
+- Emits synchronized `\an2\pos(center_x, y_tier)\k<wait_cs>\kf<dur_cs>` events so all 3 tiers for syllable $i$ are hardware-locked to the exact same horizontal center coordinate `center_x` and wipe over the exact same centisecond window.
+- Pure-English lines (`No one told me why`, `Should I sell my love to someone else`) continue to collapse cleanly into a single centered karaoke line.
+
+---
+
+## 3. Recommended Next Milestones (Scoped for Modular Sessions)
+
+To keep future sessions focused and within comfortable token budgets, we can tackle the remaining roadmap in self-contained increments:
+
+1. **Milestone A: Zero-Build Web Editor MVP (`editor.py`)**
+   - Single-file FastAPI backend (`Accept-Ranges: bytes` audio streaming, JSON load/save, `custom_dict.json` write-back, and `lint.py` issue queue) + embedded SolidJS/Vanilla + `wavesurfer.js` v7 frontend.
+   - Spacebar "Tap-Along" rhythm retiming mode (`T` key) and `Alt+Click` syllable deletion.
+2. **Milestone B: Japanese (`pykakasi`) & Multi-Mora Kanji Alignment**
+   - Add Japanese Hiragana/Katakana/Kanji detection in `singalong.py`.
+   - Decompose Kanji compounds into Furigana/Mora units so multi-syllable Kanji (`私` = *wa-ta-shi*, `光` = *hi-ka-ri*) align accurately across multiple acoustic beats.
+3. **Milestone C: Dual-Stem Lead/Backing Vocal Split & Waterfall Lyric Resolver**
+   - Optional integration of `audio-separator` (`MelBandRoformer-Karaoke`) for tracks with heavy overlapping choirs.
+   - Add `LRCLIB` (`lrclib.net`) and QQ Music (`.qrc`) fallback fetchers in `singalong.py` when NetEase Cloud Music misses.

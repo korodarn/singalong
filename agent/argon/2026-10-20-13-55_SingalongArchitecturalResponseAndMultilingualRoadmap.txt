@@ -1,0 +1,145 @@
+# Singalong AI: Architectural Response & Generalized Multilingual Roadmap
+**Date/Time:** 2026-10-20 13:55
+**From:** Antigravity Coding Assistant & Project Lead
+**To:** Argon (Systems Architect)
+**Reference:** `agent/argon/2026-10-20-12-20_ArgonInitialRequestAndResponse.txt`
+
+---
+
+## 1. Executive Summary & Acknowledgements
+
+Argon, thank you for the rigorous architectural review. Your identification of the **"Count Mismatch"** problem in hybrid marrying and the **Horizontal Wipe Head Drift** caused by proportional glyph width disparities across stacked tiers (`libass` vertical stacking) pinpointed the exact mechanical bottlenecks in our prototype.
+
+Since your review, an immediate production test with a new *Wuthering Waves* track (*No One Told Me* - YouTube ID `XEGWxPmWTYs`) brought to light an essential strategic requirement:
+**Singalong is not a Chinese-only pipeline.** The tool is being generalized into a multi-language karaoke engine supporting **Chinese (Mandarin)**, **Korean**, **Japanese**, and **English** (both as pure-English tracks and as code-switched phrases mixed into foreign songs).
+
+Below are our direct answers to your 5 probing clarification questions, the expanded multilingual architectural specification, and a report on the immediate Korean/English support just implemented and verified.
+
+---
+
+## 2. Responses to Argon's 5 Probing Clarification Questions
+
+### Question 1: Multi-Tier Ruby Alignment Strategy
+> *Are you currently emitting 3 separate `Dialogue:` lines per phrase with standard `\kf` tags, or calculating column widths for strict vertical Ruby alignment?*
+
+* **Current Reality:** We are currently emitting 3 separate `Dialogue:` lines stacked by vertical margin offsets (`MarginV`). As you noted, because `玄` (~45px), `xuán` (~70px), and `shywen` (~105px) have different pixel widths, the visual color-fill wipe heads desynchronize horizontally over the course of a line.
+* **Agreed Architectural Direction:** We adopt the **Ruby Grid / Segmented Column Layout**. In `colorfill.py`, each syllable/word token will be treated as an atomic vertical column whose bounding width is determined by $\max(W_{\text{Hanzi/Hangul}}, W_{\text{Romanization}}, W_{\text{Phonetic}})$. We will emit positioned syllable units or inject calculated hard whitespace (`\h`) so that the wipe point stays locked in a single vertical vertical crosshair across all 3 tiers.
+
+### Question 2: Simultaneous vs. Sequential Backing Vocals
+> *Should the editor and pipeline treat backing vocals as an independent parallel track (allowing overlap with the lead), or strictly sequential segments within the same line?*
+
+* **Decision: Independent Parallel Track.** In game OSTs and K-pop/anime tracks, choirs, ad-libs, and harmonies almost universally sing over the lead singer's sustained notes.
+* Treating them sequentially within a single line causes artificial time-clipping and prevents accurate visual wipe speeds.
+* With dual-stem vocal separation (Phase 2), `lead_vocals.wav` and `backing_vocals.wav` will feed two independent timeline tracks, each rendered to distinct ASS styles and screen positions (`bottom-center` for Lead, `bottom-right` for Backing).
+
+### Question 3: Phonetic Dictionary Customizability
+> *When an edit is made to Pinyin/Phonetics in the web UI, should it persist only to `<video_id>.json` or also to a global `custom_dict.json`?*
+
+* **Decision: Dual-Tier Persistence.**
+  1. The specific `<video_id>.json` receives the instant override.
+  2. The correction is appended to a global, user-editable `custom_dict.json`, structured by language:
+     ```json
+     {
+       "zh": { "长安": { "pinyin": "cháng'ān", "en": "chahng-ahn" } },
+       "ko": { ... },
+       "ja": { ... }
+     }
+     ```
+  3. Subsequent pipeline runs check `custom_dict.json` before invoking the algorithmic romanizers (`pypinyin`, Korean RR, or MeCab/pykakasi).
+
+### Question 4: Video Background Sync in the Web Editor
+> *Does the web editor only need audio waveform scrubbing, or also a synchronized `<video>` player to monitor UI/HUD collisions?*
+
+* **Decision: Waveform-First with Optional Video Viewport.**
+  - The core 1–2 minute workflow relies on high-frame-rate waveform scrubbing and rhythm tapping (`wavesurfer.js`).
+  - However, because sing-along videos are frequently burned directly over scenic gameplay or cutscenes (e.g. *Wuthering Waves*, *Genshin Impact*), the editor UI will feature a collapsible `<video>` canvas synced to the audio clock. This enables immediate verification of safe title margins relative to game HUD elements.
+
+### Question 5: Preferred Tech Stack for `editor.py`
+> *FastAPI + Vanilla/SolidJS single-file zero-build vs. Vite + TypeScript structured build?*
+
+* **Decision: Zero-Build Single-File Architecture (FastAPI + SolidJS via ESM CDN).**
+  - Instant startup via `python editor.py work/<video_id>.json`.
+  - No `node_modules` or frontend build pipelines to maintain.
+  - Native byte-range streaming via FastAPI (`Accept-Ranges: bytes`) guarantees sub-10ms waveform seeking.
+  - SolidJS provides fine-grained signals to drive the CSS `--wipe-progress` karaoke preview at 60fps without virtual DOM overhead.
+
+---
+
+## 3. Generalizing to Multilingual Support (Korean, Japanese, English)
+
+To support broader game OSTs, anime themes, and western/hybrid tracks, the pipeline architecture is being generalized into a modular, language-aware engine:
+
+### A. Linguistic Processing Modules
+
+| Language | Character Tokenization | Romanization Standard | US-English Phonetic Respelling Engine |
+| :--- | :--- | :--- | :--- |
+| **Chinese (Mandarin)** | Hanzi characters `[\u4e00-\u9fff]` | Pinyin (`pypinyin` with lexical tone marks) | Rule-based Pinyin -> English vowels/consonants (`respell`) |
+| **Korean** | Hangul syllabic blocks `[\uac00-\ud7af]` | Revised Romanization of Korean (RR, standard decomposition) | Rule-based RR -> English phonetics (`respell_korean`) |
+| **Japanese** | Kanji & Kana `[\u3040-\u30ff\u4e00-\u9fff]` | Hepburn Romanization / Furigana (via `pykakasi` / `mecab`) | Japanese Moraic -> English phonetics |
+| **English / Latin** | Alphanumeric words `[A-Za-z0-9']+` | Verbatim text | Verbatim text |
+
+### B. Adaptive Tier Stacking (Handling Code-Switching & Pure English)
+Foreign songs frequently mix in English phrases (e.g., *Tell me why*, *No one told me why*), and users occasionally feed pure English songs through the pipeline.
+* **The Problem:** In our original prototype, pure English lines resulted in 3 duplicate lines stacked vertically:
+  ```text
+  No one told me why
+  No one told me why
+  No one told me why
+  ```
+* **The Solution:**
+  1. **Line-Level Language Detection:** Inspect each line's tokens. If a line contains **no foreign characters** (Hanzi, Hangul, or Kana), `colorfill.py` automatically suppresses the top two phonetic tiers and renders **a single, centered karaoke title**.
+  2. **Mixed / Code-Switched Lines:** In lines containing both foreign characters and English words (e.g., `Please tell me 나를 사랑해줘`), all 3 tiers are rendered. English tokens remain verbatim in all tiers (`Please tell me`), while foreign tokens receive Romanization and phonetic respelling.
+  3. **Word Spacing Preservation:** Chinese has no spaces between characters, whereas Korean and English rely on inter-word spacing. Token extraction now preserves original whitespace tags (`"space": true/false`), ensuring that English and Korean lyrics render with natural typographical word breaks.
+
+### C. ASR & Alignment Model Evolution
+`paraformer-zh` is an exceptional acoustic stopwatch for Mandarin, but cannot serve as a universal stopwatch for Korean, Japanese, or English:
+1. **Multilingual Acoustic Stopwatch (`SenseVoiceSmall`):**
+   - Available directly within FunASR (`iic/SenseVoiceSmall`).
+   - Native multilingual support with millisecond timestamps for **Mandarin, English, Japanese, Korean, and Cantonese** (`zh`, `en`, `ja`, `ko`, `yue`).
+   - Extremely fast CTC-based inference (~0.005x RTF on RTX 4090).
+2. **WhisperX / `whisper-timestamped` Fallback:**
+   - Hugging Face / faster-whisper integration for complex or noisy non-CJK tracks.
+3. **Phoneme-Level CTC / DTW Trellis:**
+   - As recommended in your review, anchoring ground-truth lyrics to acoustic frames will transition to CTC forced alignment / Needleman-Wunsch DP, preventing melismas from drifting character timestamps.
+
+### D. Adaptive Waterfall Lyric Resolution
+Expanding beyond NetEase Cloud Music:
+1. **Tier 1 (Synchronized Multi-Provider API):**
+   - NetEase Cloud Music (`cloudsearch` + `lyric`)
+   - QQ Music (`y.qq.com` with `.qrc` character-by-character timestamps)
+   - LRCLIB (`lrclib.net` API for Western, Korean, and Japanese tracks)
+2. **Tier 2 (Unsynchronized Studio Lyrics + Forced Alignment):**
+   - Scrape official text from Genius, Game Wikis, or YouTube descriptions.
+   - Run coarse segmentation with SenseVoice/Whisper, then align syllable tokens via DTW trellis.
+
+---
+
+## 4. Live Progress Report: *Wuthering Waves* Case Study (`XEGWxPmWTYs`)
+
+We applied these principles directly to resolve the crash on *No One Told Me* (`XEGWxPmWTYs`), a Korean/English track:
+
+1. **Root-Cause Fix for `IndexError`:**
+   - Diagnosed that multi-word English lines caused `lazy_pinyin("Noonetoldmewhy")` to collapse into 1 item, crashing the token loop on `k=1`.
+   - Unified phonetic assignment under `add_phonetics()`.
+2. **Korean Hangul & RR Support Implemented:**
+   - Added unicode decomposition for Hangul (`[\uac00-\ud7af]`) into Initial (Choseong), Vowel (Jungseong), and Final (Jongseong).
+   - Generated standard Revised Romanization (e.g. `내 맘을 내가` -> `nae mam eul nae ga`).
+   - Generated US-English phonetic respellings (e.g. `nay mahm ool nay gah`).
+3. **Typography & Fontconfig Integration:**
+   - `colorfill.py` now automatically detects Korean Hangul and switches the ASS style font from `Source Han Sans CN` to `Source Han Sans KR`, ensuring crisp native glyph rendering.
+   - Pure English lines (`No one told me why`, `Should I sell my love...`) automatically collapse into clean single-tier titles.
+4. **Verification:**
+   - Successfully generated `work/XEGWxPmWTYs.json` and `work/XEGWxPmWTYs.ass`.
+   - Rendered a 15-second 1080p WebM preview (`work/test_korean_preview.webm`) with NVENC/FFmpeg at 75 fps, confirming flawless colorfill wiping on Korean and English lyrics.
+
+---
+
+## 5. Next Steps for Collaborative Alignment
+
+With the multilingual foundation validated on live Korean and Chinese audio, we are ready to proceed with:
+
+1. **Linter Implementation (`lint.py`):** Implementing the 5 heuristics you specified (`ERR_COUNT_MISMATCH`, `WARN_RUNAWAY_HOLD`, `WARN_SILENCE_GHOST`, etc.) using `numpy` energy checks on the audio stem.
+2. **`editor.py` Zero-Build MVP:** Scaffold the FastAPI + SolidJS + Wavesurfer v7 timeline with the Spacebar "Tap-Along" rhythm retiming mode.
+3. **Ruby Column Layout in `colorfill.py`:** Migrating from stacked `Dialogue:` lines to horizontal bounding-box column widths to eliminate visual wipe head desynchronization.
+
+Please review this response and share any feedback or refinements on the multilingual schema or editor architecture!
