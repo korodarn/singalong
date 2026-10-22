@@ -469,15 +469,24 @@ def run(cmd):
     subprocess.run(cmd, check=True)
 
 
+def extract_youtube_id(url_or_vid: str) -> str | None:
+    s = url_or_vid.strip()
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", s):
+        return s
+    m = re.search(r"(?:v=|youtu\.be/|shorts/|embed/)([A-Za-z0-9_-]{11})", s)
+    return m.group(1) if m else None
+
+
 def download_audio(url_or_vid: str, workdir: Path):
-    # Support passing a local video ID or path directly if already downloaded
-    cand_id = url_or_vid.strip()
-    if re.fullmatch(r"[A-Za-z0-9_-]{11}", cand_id) and (workdir / f"{cand_id}.wav").exists():
+    # Support passing a local video ID or URL directly if already downloaded
+    cand_id = extract_youtube_id(url_or_vid)
+    if cand_id and (workdir / f"{cand_id}.wav").exists():
         print(f"[1/4] Reusing local audio for ID {cand_id}: {workdir / f'{cand_id}.wav'}")
         return cand_id, cand_id, workdir / f"{cand_id}.wav"
 
+    target_url = f"https://www.youtube.com/watch?v={cand_id}" if cand_id else url_or_vid.strip()
     out = subprocess.run(
-        [sys.executable, "-m", "yt_dlp", "--no-playlist", "--print", "%(id)s\t%(title)s", url_or_vid],
+        [sys.executable, "-m", "yt_dlp", "--no-playlist", "--print", "%(id)s\t%(title)s", "--", target_url],
         check=True, capture_output=True, text=True,
     ).stdout.strip().splitlines()[-1]
     parts = out.split("\t", 1)
@@ -490,7 +499,7 @@ def download_audio(url_or_vid: str, workdir: Path):
     else:
         print(f"[1/4] Downloading audio for '{title}'...")
         run([sys.executable, "-m", "yt_dlp", "--no-playlist", "-x",
-             "--audio-format", "wav", "-o", str(workdir / f"{vid}.%(ext)s"), url_or_vid])
+             "--audio-format", "wav", "-o", str(workdir / f"{vid}.%(ext)s"), "--", target_url])
     return vid, title, wav
 
 
@@ -993,7 +1002,10 @@ def enforce_non_overlapping_lines(lines: list[dict]):
 
 
 def align_lrc_with_tokens(lrc_lines, tokens, analyzer: VocalAnalyzer | None = None):
-    """Marry NetEase ground-truth synchronized lines with FunASR acoustic tokens and vocal energy."""
+    """
+    Marry NetEase ground-truth synchronized lines with FunASR acoustic tokens and vocal energy.
+    Uses phonetic sliding-window anchor matching to resolve drifted or inaccurate LRC line timestamps.
+    """
     if not lrc_lines:
         return []
     if analyzer is None:
@@ -1001,6 +1013,11 @@ def align_lrc_with_tokens(lrc_lines, tokens, analyzer: VocalAnalyzer | None = No
 
     first_line_start = lrc_lines[0]["start"]
     valid_tokens = [t for t in tokens if t["start"] >= first_line_start - 600]
+
+    # Pre-calculate token pinyin for phonetic matching
+    for t in valid_tokens:
+        if "pinyin" not in t:
+            t["pinyin"] = lazy_pinyin(t["text"])[0] if t["text"].strip() else ""
 
     # Group lrc_lines into time windows (items sharing the exact same start timestamp)
     windows = []
@@ -1013,14 +1030,50 @@ def align_lrc_with_tokens(lrc_lines, tokens, analyzer: VocalAnalyzer | None = No
         windows.append(lrc_lines[i:j])
         i = j
 
-    # Assign tokens to each window
+    # Step 1: Phonetic Anchor Matching
+    from rapidfuzz import fuzz
+    anchors = []
+    for w_idx, win in enumerate(windows):
+        combined_text = "".join(it["text"] for it in win)
+        c_chars = tokenize_text(combined_text)
+        c_py = " ".join(lazy_pinyin("".join(c_chars)))
+        nom_s = win[0]["start"]
+
+        # Search around nominal start [-3.5s .. +7.5s]
+        cands = [t for t in valid_tokens if nom_s - 3500 <= t["start"] <= nom_s + 7500]
+        best_sub = None
+        best_r = -1
+        if c_chars and cands:
+            for span_len in range(max(1, len(c_chars) - 2), min(len(cands) + 1, len(c_chars) + 4)):
+                for k in range(len(cands) - span_len + 1):
+                    sub = cands[k:k + span_len]
+                    sub_py = " ".join(t["pinyin"] for t in sub)
+                    r = fuzz.ratio(c_py, sub_py)
+                    if r > best_r:
+                        best_r = r
+                        best_sub = sub
+
+        if best_sub and best_r >= 65:
+            anchors.append({"start": best_sub[0]["start"], "end": best_sub[-1]["end"], "conf": True})
+        else:
+            anchors.append({"start": nom_s, "end": None, "conf": False})
+
+    # Monotonicity pass
+    prev_s = 0
+    for idx in range(len(anchors)):
+        if anchors[idx]["start"] < prev_s:
+            anchors[idx]["start"] = prev_s + 500
+            anchors[idx]["conf"] = False
+        prev_s = anchors[idx]["start"]
+
+    # Step 2: Assign tokens to each window using anchored boundaries
     win_tokens = [[] for _ in windows]
     for tok in valid_tokens:
         t_start = tok["start"]
         best_w = 0
         for w_idx in range(len(windows)):
-            w_start = windows[w_idx][0]["start"]
-            if t_start >= w_start - 350:
+            w_start = anchors[w_idx]["start"]
+            if t_start >= w_start - 250:
                 best_w = w_idx
             else:
                 break
@@ -1029,11 +1082,12 @@ def align_lrc_with_tokens(lrc_lines, tokens, analyzer: VocalAnalyzer | None = No
     out_lines = []
     for w_idx, win in enumerate(windows):
         toks = win_tokens[w_idx]
-        next_start = windows[w_idx + 1][0]["start"] if w_idx + 1 < len(windows) else win[0]["start"] + 6000
+        anc_s = anchors[w_idx]["start"]
+        next_start = anchors[w_idx + 1]["start"] if w_idx + 1 < len(windows) else anc_s + 6000
 
         if len(win) == 1:
             item = win[0]
-            tok_list = align_line_with_clauses(item["text"], toks, item["start"], next_start, analyzer)
+            tok_list = align_line_with_clauses(item["text"], toks, anc_s, next_start, analyzer)
             if tok_list:
                 out_lines.append({
                     "start": tok_list[0]["start"],
@@ -1047,7 +1101,7 @@ def align_lrc_with_tokens(lrc_lines, tokens, analyzer: VocalAnalyzer | None = No
             total_chars = max(1, sum(char_counts))
 
             tok_offset = 0
-            time_offset = win[0]["start"]
+            time_offset = anc_s
             window_duration = next_start - time_offset
 
             for it_idx, item in enumerate(win):
@@ -1123,15 +1177,18 @@ def main():
                     help="custom query/title for NetEase Cloud Music lyrics lookup")
     ap.add_argument("--skip-netease", action="store_true",
                     help="skip NetEase lyrics lookup and run ASR only")
+    ap.add_argument("--force-lrc", action="store_true",
+                    help="force re-fetching NetEase lyrics even if cached")
     args = ap.parse_args()
 
     if args.device is None:
         import torch
         args.device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    print(f"Device: {args.device}")
+    print(f"Device: {args.device}", flush=True)
 
     args.workdir.mkdir(parents=True, exist_ok=True)
     vid, title, wav = download_audio(args.url, args.workdir)
+    print(f"[RESOLVED_VID] {vid}", flush=True)
 
     src = wav if args.skip_demucs else isolate_vocals(wav, args.workdir, args.device)
     text, stamps = transcribe(src, args.workdir, vid, args.device)
@@ -1139,7 +1196,7 @@ def main():
     netease_lines = None
     if not args.skip_netease:
         query = args.query or title
-        netease_lines = fetch_netease_lyrics(query, args.workdir, vid, asr_text=text)
+        netease_lines = fetch_netease_lyrics(query, args.workdir, vid, asr_text=text, force_refresh=args.force_lrc)
         if netease_lines:
             print(f"\n[NetEase Sync Preview - first 5 lines]:")
             for item in netease_lines[:5]:

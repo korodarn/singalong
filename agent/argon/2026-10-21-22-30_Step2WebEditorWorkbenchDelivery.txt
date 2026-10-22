@@ -1,0 +1,35 @@
+# Singalong AI: Step 2 Interactive Web Editor & YouTube Pipeline Workbench (Argon Review & Fixes)
+**Date/Time:** 2026-10-22 00:47
+**From:** Argon (Systems Architect & Pair Programmer)
+**References:**
+- `agent/argon/2026-10-20-13-55_SingalongArchitecturalResponseAndMultilingualRoadmap.txt`
+- `agent/argon/2026-10-20-19-20_ArgonPhase1ProgressAndNextSteps.txt`
+
+---
+
+## 1. Root-Cause Review of Initial Prototype Issues & What Argon Fixed
+
+Upon reviewing the initial `editor.py` draft, we diagnosed and fixed six critical bugs and missing workflows:
+
+1. **Missing End-to-End YouTube Video Code / URL Ingestion (`singalong.py` Integration):**
+   - **Issue:** Previously, `editor.py` only had a dropdown for *already-created* `.json` files in `work/`. Entering a YouTube code (like `XEGWxPmWTYs` or a new video ID/URL) had no UI input and no backend endpoint to run Pipeline 1 (`singalong.py`) through to creating `<vid>.json`. Passing an unprocessed video ID on the CLI resulted in a 404 alert.
+   - **Fix:** Added a prominent **YouTube ID / URL Ingestion Bar** (`🚀 Import / Create JSON`) directly in the top header and a **YouTube Import & Alignment Pipeline Modal** backed by `GET /api/pipeline/run` (SSE). Entering `XEGWxPmWTYs` (or any YouTube ID/URL) runs `singalong.py` (`yt-dlp` -> `demucs` -> `NetEase LRC` -> `FunASR` -> `Alignment`), streams live 4-step progress into the browser, writes `work/<vid>.json`, and automatically loads the finished project into the workbench.
+
+2. **Single-Threaded HTTP/1.1 Keep-Alive Deadlock in `editor.py`:**
+   - **Issue:** The initial draft defined `class ThreadingHTTPServer(HTTPServer):` inheriting from single-threaded `HTTPServer` instead of `http.server.ThreadingHTTPServer` (`ThreadingMixIn`), while setting `protocol_version = "HTTP/1.1"`. In browsers, the first HTTP/1.1 keep-alive socket or audio stream blocked all concurrent requests (`GET /api/project/...`, `GET /api/audio/...`, and SSE streams).
+   - **Fix:** Inherited properly from `http.server.ThreadingHTTPServer` (`_StdThreadingHTTPServer`) with `daemon_threads = True` and `allow_reuse_address = True`, and set `self.close_connection = True` on SSE streams so connections never hang or block concurrent browser requests.
+
+3. **WaveSurfer v7 Shadow DOM Regions & Unzoomed Waveform:**
+   - **Issue:** In WaveSurfer v7, regions render inside a Shadow DOM and ignore external `.wavesurfer-region` CSS classes; `region.data` was also not persisted properly on drag events, and default zoom was `0` (squeezing a 4.5-minute song into a tiny strip where syllable regions were 2px wide).
+   - **Fix:** Passed explicit RGBA colors (`rgba(255, 215, 0, 0.26)` for Gold Lead, `rgba(112, 214, 255, 0.28)` for Cyan Backing) to `wsRegions.addRegion()`, mapped region IDs via `regionTokenMap`, and auto-zoomed the waveform (`70 px/sec`) centered on the active line.
+
+4. **Interactive Karaoke Stage (`Alt+Click`, `Double-Click`, `Click-to-Seek`, and Line Splitting):**
+   - **Issue:** Syllables in the top Karaoke Preview stage had no click handlers, and deleting a syllable (`Alt+Click`) did not recalculate `line.start` / `line.end` or filter deleted tokens in `lint.py`.
+   - **Fix:** Wired `Click` (seek & play syllable), `Alt+Click` (toggle strikethrough deletion on Stage, Waveform, or Table), `Double-Click` (open Pinyin/US-English Phonetics & `custom_dict.json` override modal), and added a `✂ Split` button on syllables to split combined clauses into separate Lead/Backing lines. Updated `lint.py` to ignore `is_deleted` tokens.
+
+5. **Playhead Auto-Follow & Bounded Line Playback (`R`, `J`, `L` Keys):**
+   - **Issue:** Continuous playback stayed stuck displaying Line #1 forever, `Play Line (R)` never stopped at the end of the line, and `R`/`J`/`L` hotkeys were unbound.
+   - **Fix:** Added `📍 Follow Playhead: ON` so the active line advances automatically during playback, bounded `🎯 Play Line (R)` to pause at `line.end + 150ms`, and bound all keyboard shortcuts.
+
+6. **In-Memory Audio Cache in `lint.py` (`195ms` -> `12ms`):**
+   - Cached `(mtime, audio_mono, sr)` in `lint.py` so saving edits (`Ctrl+S`) re-lints in `~12ms` instead of re-reading 50MB `.wav` files from disk on every save.

@@ -16,12 +16,21 @@ import numpy as np
 import soundfile as sf
 
 
+_AUDIO_CACHE: dict[str, tuple[float, np.ndarray, int]] = {}
+
+
 def load_audio_mono(wav_path: Path | None):
     if not wav_path or not wav_path.exists():
         return None, None
+    key = str(wav_path.resolve())
+    mtime = wav_path.stat().st_mtime
+    cached = _AUDIO_CACHE.get(key)
+    if cached is not None and cached[0] == mtime:
+        return cached[1], cached[2]
     data, sr = sf.read(str(wav_path), dtype="float32")
     if data.ndim > 1:
         data = np.mean(data, axis=1)
+    _AUDIO_CACHE[key] = (mtime, data, sr)
     return data, sr
 
 
@@ -58,13 +67,22 @@ def lint_project(json_path: Path, vocals_path: Path | None = None) -> dict:
     prev_end = {False: -1, True: -1}
 
     for idx, ln in enumerate(lines):
-        toks = ln.get("tokens", [])
+        toks = [t for t in ln.get("tokens", []) if not t.get("is_deleted")]
+        is_backing = bool(ln.get("is_backing", False))
         if not toks:
+            report_lines.append({
+                "line_index": idx,
+                "start": ln.get("start", 0),
+                "end": ln.get("end", 0),
+                "is_backing": is_backing,
+                "text": "(deleted line)",
+                "score": 100,
+                "issues": [],
+            })
             continue
 
-        is_backing = bool(ln.get("is_backing", False))
-        ln_start = ln.get("start", toks[0]["start"])
-        ln_end = ln.get("end", toks[-1]["end"])
+        ln_start = toks[0]["start"]
+        ln_end = toks[-1]["end"]
         text_preview = "".join(
             t["text"] + (" " if t.get("space") else "") for t in toks
         ).strip()

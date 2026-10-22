@@ -272,6 +272,38 @@ def generate_ass(lines: list, cfg: dict, ass_path: Path):
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
 
+    # Precalculate non-overlapping display windows per vocal track (lead vs backing)
+    disp_windows = {}
+    for track_is_backing in (False, True):
+        track_lines = [ln for ln in lines if bool(ln.get("is_backing", False)) == track_is_backing and ln.get("tokens")]
+        for idx, ln in enumerate(track_lines):
+            toks = [t for t in ln["tokens"] if not t.get("is_deleted")]
+            if not toks:
+                continue
+            first_s = toks[0]["start"]
+            last_e = toks[-1]["end"]
+
+            disp_s = max(0, first_s - 400)
+            disp_e = last_e + 400
+
+            # Guard against previous line on same track overlapping on screen
+            if idx > 0:
+                prev_toks = [t for t in track_lines[idx - 1]["tokens"] if not t.get("is_deleted")]
+                if prev_toks:
+                    prev_e = prev_toks[-1]["end"]
+                    midpoint = (prev_e + first_s) // 2
+                    disp_s = max(disp_s, midpoint + 15)
+
+            # Guard against next line on same track overlapping on screen
+            if idx + 1 < len(track_lines):
+                next_toks = [t for t in track_lines[idx + 1]["tokens"] if not t.get("is_deleted")]
+                if next_toks:
+                    next_s = next_toks[0]["start"]
+                    midpoint = (last_e + next_s) // 2
+                    disp_e = min(disp_e, midpoint - 15)
+
+            disp_windows[id(ln)] = (disp_s, max(disp_s + 100, disp_e))
+
     for ln in lines:
         tokens = [t for t in ln.get("tokens", []) if not t.get("is_deleted")]
         if not tokens:
@@ -280,8 +312,7 @@ def generate_ass(lines: list, cfg: dict, ass_path: Path):
         first_start = tokens[0]["start"]
         last_end = tokens[-1]["end"]
 
-        disp_start = max(0, first_start - 400)
-        disp_end = last_end + 400
+        disp_start, disp_end = disp_windows.get(id(ln), (max(0, first_start - 400), last_end + 400))
         st = fmt_ass_time(disp_start)
         et = fmt_ass_time(disp_end)
 
