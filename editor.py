@@ -782,8 +782,8 @@ EDITOR_HTML = r"""<!DOCTYPE html>
     .preview-stage {
       background: #000000;
       background-image: radial-gradient(circle at 50% 30%, #151a2d 0%, #000000 85%);
-      min-height: 175px;
-      max-height: 230px;
+      min-height: 110px;
+      height: 195px;
       padding: 14px 24px 22px 24px;
       display: flex;
       flex-direction: column;
@@ -862,8 +862,9 @@ EDITOR_HTML = r"""<!DOCTYPE html>
       padding: 4px 6px;
       border-radius: 6px;
       cursor: pointer;
-      transition: background 0.12s, transform 0.1s;
+      transition: background 0.12s, transform 0.1s, box-shadow 0.12s;
       border: 1px solid transparent;
+      position: relative;
     }
     .karaoke-col:hover {
       background: rgba(255, 255, 255, 0.07);
@@ -872,6 +873,23 @@ EDITOR_HTML = r"""<!DOCTYPE html>
     .karaoke-col.active-now {
       background: rgba(255, 215, 0, 0.1);
       border-color: rgba(255, 215, 0, 0.35);
+    }
+    .karaoke-col.selected {
+      outline: 2px solid var(--accent-primary);
+      outline-offset: 2px;
+      background: rgba(99, 102, 241, 0.24);
+      border-color: var(--accent-primary);
+      box-shadow: 0 0 14px rgba(99, 102, 241, 0.45);
+    }
+    .karaoke-col-comment-badge {
+      position: absolute;
+      top: -6px;
+      right: -6px;
+      font-size: 11px;
+      cursor: pointer;
+      filter: drop-shadow(0 2px 4px rgba(0,0,0,0.85));
+      z-index: 4;
+      line-height: 1;
     }
     .karaoke-col.has-space { margin-right: 18px; }
     .karaoke-col.deleted {
@@ -1004,8 +1022,78 @@ EDITOR_HTML = r"""<!DOCTYPE html>
       border-radius: 6px;
       overflow: hidden;
       height: 102px;
+      user-select: none;
     }
     #waveform { width: 100%; height: 100px; }
+    #waveform-selection-overlay {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      background: rgba(99, 102, 241, 0.3);
+      border-left: 2px solid var(--accent-primary);
+      border-right: 2px solid var(--accent-primary);
+      pointer-events: none;
+      display: none;
+      z-index: 10;
+    }
+
+    /* Resizer Gutters */
+    .resizer-gutter {
+      background: transparent;
+      position: relative;
+      z-index: 30;
+      flex-shrink: 0;
+      transition: background 0.15s ease;
+    }
+    .resizer-col {
+      width: 8px;
+      margin: 0 -4px;
+      cursor: col-resize;
+    }
+    .resizer-col::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 3px;
+      width: 2px;
+      background: var(--border-subtle);
+      transition: background 0.15s ease, width 0.15s ease;
+    }
+    .resizer-col:hover::after, .resizer-col.resizing::after {
+      background: var(--accent-primary);
+      width: 4px;
+      left: 2px;
+    }
+    .resizer-row {
+      height: 8px;
+      margin: -4px 0;
+      cursor: row-resize;
+      width: 100%;
+    }
+    .resizer-row::after {
+      content: '';
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 3px;
+      height: 2px;
+      background: var(--border-subtle);
+      transition: background 0.15s ease, height 0.15s ease;
+    }
+    .resizer-row:hover::after, .resizer-row.resizing::after {
+      background: var(--accent-primary);
+      height: 4px;
+      top: 2px;
+    }
+    body.is-resizing-col, body.is-resizing-col * {
+      cursor: col-resize !important;
+      user-select: none !important;
+    }
+    body.is-resizing-row, body.is-resizing-row * {
+      cursor: row-resize !important;
+      user-select: none !important;
+    }
 
     /* Stage 3: Split Line List and Syllable Table */
     .editor-body {
@@ -1017,6 +1105,8 @@ EDITOR_HTML = r"""<!DOCTYPE html>
 
     .lines-sidebar {
       width: 410px;
+      min-width: 240px;
+      max-width: 70vw;
       border-right: 1px solid var(--border-subtle);
       background: var(--bg-darker);
       display: flex;
@@ -1095,6 +1185,7 @@ EDITOR_HTML = r"""<!DOCTYPE html>
       display: flex;
       flex-wrap: wrap;
       gap: 4px;
+      align-items: center;
     }
     .issue-pill {
       font-size: 10px;
@@ -1108,6 +1199,20 @@ EDITOR_HTML = r"""<!DOCTYPE html>
     .issue-WARN_SILENCE_GHOST { background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.4); }
     .issue-WARN_RUNAWAY_HOLD { background: rgba(249, 115, 22, 0.2); color: #fb923c; border: 1px solid rgba(249, 115, 22, 0.4); }
     .issue-WARN_UNIFORM_FALLBACK { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); }
+    
+    .line-comment-pill {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-family: var(--font-mono);
+      background: rgba(168, 85, 247, 0.25);
+      color: #e9d5ff;
+      border: 1px solid rgba(168, 85, 247, 0.5);
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+    }
 
     /* Syllable Detail Inspector (Right Pane) */
     .syllable-inspector {
@@ -1131,6 +1236,7 @@ EDITOR_HTML = r"""<!DOCTYPE html>
       display: flex;
       gap: 6px;
       align-items: center;
+      flex-wrap: wrap;
     }
 
     .table-container {
@@ -1159,9 +1265,17 @@ EDITOR_HTML = r"""<!DOCTYPE html>
       padding: 6px 10px;
       border-bottom: 1px solid var(--border-subtle);
       vertical-align: middle;
+      transition: background 0.1s ease;
     }
     table.syllable-table tr:hover td { background: var(--bg-card); }
-    table.syllable-table tr.active td { background: rgba(99, 102, 241, 0.18); }
+    table.syllable-table tr.active td { background: rgba(99, 102, 241, 0.16); }
+    table.syllable-table tr.selected td {
+      background: rgba(99, 102, 241, 0.32) !important;
+      border-color: rgba(99, 102, 241, 0.6);
+    }
+    table.syllable-table tr.selected td:first-child {
+      border-left: 3px solid var(--accent-primary);
+    }
     table.syllable-table tr.deleted td {
       opacity: 0.38;
       text-decoration: line-through;
@@ -1188,6 +1302,63 @@ EDITOR_HTML = r"""<!DOCTYPE html>
       background: var(--border-bright);
       border-color: var(--accent-lead);
     }
+    .token-comment-chip {
+      background: rgba(168, 85, 247, 0.22);
+      border: 1px solid rgba(168, 85, 247, 0.5);
+      color: #e9d5ff;
+      border-radius: 4px;
+      padding: 2px 7px;
+      font-size: 11px;
+      font-family: var(--font-sans);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      max-width: 175px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      transition: all 0.15s ease;
+    }
+    .token-comment-chip:hover {
+      background: rgba(168, 85, 247, 0.38);
+      border-color: #c084fc;
+    }
+    .btn-add-comment-mini {
+      background: transparent;
+      border: 1px dashed var(--border-bright);
+      color: var(--text-dim);
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .btn-add-comment-mini:hover {
+      border-color: var(--accent-primary);
+      color: var(--text-white);
+      background: rgba(99, 102, 241, 0.15);
+    }
+    .btn-push {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-bright);
+      color: var(--text-white);
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.12s ease;
+    }
+    .btn-push:hover:not(:disabled) {
+      background: rgba(99, 102, 241, 0.25);
+      border-color: var(--accent-primary);
+      color: #fff;
+    }
+    .btn-push:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+
     input.editable-time {
       background: var(--bg-panel);
       border: 1px solid var(--border-bright);
@@ -1202,6 +1373,38 @@ EDITOR_HTML = r"""<!DOCTYPE html>
       border-color: var(--accent-primary);
       outline: none;
     }
+
+    .region-selected {
+      outline: 2px solid #a855f7 !important;
+      background: rgba(168, 85, 247, 0.45) !important;
+      z-index: 10 !important;
+    }
+
+    /* Toast Notifications */
+    #toast-container {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 9999;
+      pointer-events: none;
+    }
+    .toast-msg {
+      background: var(--bg-panel);
+      border: 1px solid var(--accent-primary);
+      color: var(--text-white);
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+      animation: toastIn 0.2s ease, toastOut 0.2s ease 2.6s forwards;
+      pointer-events: auto;
+    }
+    @keyframes toastIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes toastOut { to { opacity: 0; transform: translateY(-10px); } }
 
     /* Modals */
     .modal-overlay {
@@ -1384,7 +1587,7 @@ EDITOR_HTML = r"""<!DOCTYPE html>
     <section class="preview-stage">
       <div class="stage-top-meta">
         <div id="lane-badge" class="lane-badge lead">LEAD VOCALS (GOLD)</div>
-        <div class="stage-hint">Click syllable: Seek • Alt+Click: Delete/Restore • Double-Click: Edit Pinyin/Phonetics</div>
+        <div class="stage-hint">Click: Seek/Select • Shift+Click: Range Select • [C]: Add Analysis Comment</div>
       </div>
 
       <div id="video-container" class="video-viewport-container">
@@ -1401,6 +1604,8 @@ EDITOR_HTML = r"""<!DOCTYPE html>
         <span style="font-size: 11px; opacity: 0.9;">Tap [SPACE] on each syllable onset • [ESC] to cancel</span>
       </div>
     </section>
+
+    <div id="resizer-preview" class="resizer-gutter resizer-row" title="Drag or Right-Click & Drag to resize karaoke preview height"></div>
 
     <!-- Stage 2: Waveform & Region Editor -->
     <section class="waveform-stage">
@@ -1440,9 +1645,12 @@ EDITOR_HTML = r"""<!DOCTYPE html>
       </div>
 
       <div id="waveform-container">
+        <div id="waveform-selection-overlay"></div>
         <div id="waveform"></div>
       </div>
     </section>
+
+    <div id="resizer-waveform" class="resizer-gutter resizer-row" title="Drag or Right-Click & Drag to resize waveform height"></div>
 
     <!-- Stage 3: Split Line Sidebar and Syllable Table -->
     <section class="editor-body">
@@ -1457,14 +1665,30 @@ EDITOR_HTML = r"""<!DOCTYPE html>
         </div>
       </aside>
 
+      <div id="resizer-sidebar" class="resizer-gutter resizer-col" title="Drag or Right-Click & Drag to resize sidebar width"></div>
+
       <!-- Right: Syllable Detail Inspector -->
       <section class="syllable-inspector">
         <div class="inspector-header">
-          <div>
-            <span style="font-weight: 700; font-size: 13px;">Active Line Syllable Inspector</span>
-            <span id="active-line-meta" style="margin-left: 10px; font-family: var(--font-mono); font-size: 12px; color: var(--text-muted);">Line #1</span>
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <div>
+              <span style="font-weight: 700; font-size: 13px;">Active Line Syllable Inspector</span>
+              <span id="active-line-meta" style="margin-left: 8px; font-family: var(--font-mono); font-size: 12px; color: var(--text-muted);">Line #1</span>
+            </div>
+
+            <div id="selection-status-bar" style="display: none; align-items: center; gap: 6px; background: rgba(99, 102, 241, 0.2); border: 1px solid var(--accent-primary); padding: 2px 8px; border-radius: 5px; font-size: 11px;">
+              <span id="selection-count-text" style="font-weight: 700; color: #c7d2fe;">0 selected</span>
+              <button class="btn btn-lead" style="padding: 1px 6px; font-size: 11px;" onclick="openCommentModalForSelected()" title="Add / Edit Comment for selected syllables (C)">💬 Comment (C)</button>
+              <button class="btn" style="padding: 1px 6px; font-size: 11px;" onclick="pushSelectedToPrevLine()" title="Push selected syllables into previous line">⬆ To Prev</button>
+              <button class="btn" style="padding: 1px 6px; font-size: 11px;" onclick="pushSelectedToNextLine()" title="Push selected syllables into next line">⬇ To Next</button>
+              <button class="btn" style="padding: 1px 5px; font-size: 11px;" onclick="clearTokenSelection()" title="Clear selection (Esc)">✕</button>
+            </div>
           </div>
+
           <div class="inspector-actions">
+            <button class="btn" onclick="openCommentModalForSelected()" title="Add / Edit Comment for active or selected syllables (C)">
+              💬 Comment (C)
+            </button>
             <button class="btn" onclick="nudgeActiveLine(-50)" title="Shift entire line earlier by 50ms">◀ -50ms</button>
             <button class="btn" onclick="nudgeActiveLine(50)" title="Shift entire line later by 50ms">+50ms ▶</button>
             <button class="btn" onclick="toggleBackingActiveLine()" title="Toggle Lead / Backing Vocals (B)">
@@ -1480,14 +1704,16 @@ EDITOR_HTML = r"""<!DOCTYPE html>
           <table class="syllable-table">
             <thead>
               <tr>
-                <th style="width: 36px;">#</th>
+                <th style="width: 28px; text-align: center;"><input type="checkbox" id="select-all-cbox" onchange="toggleSelectAllTokens(this.checked)" title="Select/Deselect all syllables (Shift+Click for range)"></th>
+                <th style="width: 32px;">#</th>
                 <th style="width: 75px;">Syllable</th>
-                <th style="width: 135px;">Pinyin / RR (Edit)</th>
-                <th style="width: 155px;">US Phonetic (Edit)</th>
-                <th style="width: 105px;">Start (ms)</th>
-                <th style="width: 105px;">End (ms)</th>
-                <th style="width: 75px;">Dur</th>
-                <th style="width: 145px;">Actions</th>
+                <th style="width: 125px;">Pinyin / RR (Edit)</th>
+                <th style="width: 135px;">US Phonetic (Edit)</th>
+                <th style="width: 95px;">Start (ms)</th>
+                <th style="width: 95px;">End (ms)</th>
+                <th style="width: 65px;">Dur</th>
+                <th style="width: 165px;">💬 Comment / Notes</th>
+                <th style="width: 215px;">Actions</th>
               </tr>
             </thead>
             <tbody id="syllables-tbody">
@@ -1618,6 +1844,45 @@ EDITOR_HTML = r"""<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- Modal 4: Analysis Comment for Automated Improvements -->
+  <div id="modal-comment" class="modal-overlay">
+    <div class="modal-box" style="width: 580px;">
+      <div class="modal-title">
+        <span>💬 Add Analysis Comment for Syllable Selection</span>
+        <button class="btn" style="padding: 2px 8px;" onclick="closeCommentModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="comment-modal-target-info" style="background: var(--bg-darker); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border-subtle); font-size: 12px;">
+          <!-- Target info filled dynamically -->
+        </div>
+
+        <div class="form-group">
+          <label>Quick Analysis Feedback Tags (Click to insert):</label>
+          <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px;">
+            <button type="button" class="btn" style="padding: 2px 8px; font-size: 11px;" onclick="insertCommentTag('ASR missed onset')">⚡ ASR Missed Onset</button>
+            <button type="button" class="btn" style="padding: 2px 8px; font-size: 11px;" onclick="insertCommentTag('Boundary bleed')">⚡ Boundary Bleed</button>
+            <button type="button" class="btn" style="padding: 2px 8px; font-size: 11px;" onclick="insertCommentTag('Reverb ghost tail')">⚡ Reverb Ghost Tail</button>
+            <button type="button" class="btn" style="padding: 2px 8px; font-size: 11px;" onclick="insertCommentTag('LRC text mismatch')">⚡ LRC Mismatch</button>
+            <button type="button" class="btn" style="padding: 2px 8px; font-size: 11px;" onclick="insertCommentTag('Consonant unvoiced/dropped')">⚡ Dropped Consonant</button>
+            <button type="button" class="btn" style="padding: 2px 8px; font-size: 11px;" onclick="insertCommentTag('Hold sustained too long')">⚡ Runaway Hold</button>
+            <button type="button" class="btn" style="padding: 2px 8px; font-size: 11px;" onclick="insertCommentTag('Line split needed')">⚡ Line Split Needed</button>
+            <button type="button" class="btn" style="padding: 2px 8px; font-size: 11px;" onclick="insertCommentTag('Backing vocal overlap')">⚡ Backing Overlap</button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Analysis Direction / Notes (to guide automated improvements):</label>
+          <textarea id="comment-textarea" rows="4" style="background: var(--bg-darker); border: 1px solid var(--border-bright); color: var(--text-white); padding: 8px 10px; border-radius: 6px; font-size: 13px; font-family: var(--font-sans); resize: vertical;" placeholder="Add notes explaining where the automated alignment was off and what needs improvement..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-delete-comment" class="btn btn-danger" onclick="deleteComment()" style="margin-right: auto; display: none;">🗑️ Clear Comment</button>
+        <button class="btn" onclick="closeCommentModal()">Cancel (Esc)</button>
+        <button class="btn btn-primary" onclick="saveComment()">💾 Save Comment (Ctrl+Enter)</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     // Application State
     let currentVid = "";
@@ -1636,6 +1901,8 @@ EDITOR_HTML = r"""<!DOCTYPE html>
     let lineStopTimeSec = null;
     let customDictPending = {};
     let activeEditingToken = null;
+    let selectedTokenIndices = new Set();
+    let lastSelectedTokenIdx = null;
 
     function fmtMs(ms) {
       if (ms < 0 || isNaN(ms)) ms = 0;
@@ -1647,6 +1914,8 @@ EDITOR_HTML = r"""<!DOCTYPE html>
 
     window.addEventListener('DOMContentLoaded', async () => {
       initWaveSurfer();
+      initBorderResizers();
+      setupWaveformShiftSelection();
       await fetchProjects(true);
       setupKeybindings();
       startKaraokeClockLoop();
@@ -1741,10 +2010,20 @@ EDITOR_HTML = r"""<!DOCTYPE html>
         wsRegions.on('region-clicked', (region, e) => {
           e.stopPropagation();
           const meta = regionTokenMap.get(region.id);
-          if (e.altKey && meta) {
+          if (!meta) return;
+          if (e.altKey) {
             toggleTokenDeleted(meta.tokIdx);
             return;
           }
+          if (e.shiftKey) {
+            handleTokenShiftSelect(meta.tokIdx);
+            return;
+          }
+          if (e.ctrlKey || e.metaKey) {
+            handleTokenToggleSelect(meta.tokIdx);
+            return;
+          }
+          handleTokenSingleSelect(meta.tokIdx);
           wavesurfer.setTime(region.start);
         });
       }
@@ -1911,13 +2190,23 @@ EDITOR_HTML = r"""<!DOCTYPE html>
             '</div>';
         }
 
+        const commentCount = (ln.tokens || []).filter(t => t.comment && t.comment.trim()).length;
+        let commentHtml = '';
+        if (commentCount > 0) {
+          const firstComment = (ln.tokens || []).find(t => t.comment && t.comment.trim()).comment;
+          commentHtml = `<span class="line-comment-pill" title="${escapeHtml(firstComment)}">💬 ${commentCount} note${commentCount > 1 ? 's' : ''}</span>`;
+        }
+
         card.innerHTML = `
           <div class="line-card-header">
             <span class="line-idx">#${String(idx + 1).padStart(2, '0')} ${isBacking ? '👥 BACKING' : '🎤 LEAD'}</span>
             <span class="line-time">${fmtMs(start)} → ${fmtMs(end)}</span>
           </div>
           <div class="line-preview-text">${text || '(all tokens deleted)'}</div>
-          ${issuesHtml}
+          <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+            ${issuesHtml}
+            ${commentHtml}
+          </div>
         `;
         container.appendChild(card);
       });
@@ -1926,6 +2215,8 @@ EDITOR_HTML = r"""<!DOCTYPE html>
     function selectLine(idx, seekAudio = true) {
       if (!projectData || !projectData.lines[idx]) return;
       activeLineIdx = idx;
+      selectedTokenIndices.clear();
+      lastSelectedTokenIdx = null;
       renderLinesSidebar();
       renderActiveLine();
       updateWaveformRegions();
@@ -1972,10 +2263,11 @@ EDITOR_HTML = r"""<!DOCTYPE html>
       container.classList.toggle('pure-english', !hasCjk);
 
       toks.forEach((tok, tokIdx) => {
+        const isSelected = selectedTokenIndices.has(tokIdx);
         const col = document.createElement('div');
-        col.className = `karaoke-col ${tok.space ? 'has-space' : ''} ${tok.is_deleted ? 'deleted' : ''}`;
+        col.className = `karaoke-col ${tok.space ? 'has-space' : ''} ${tok.is_deleted ? 'deleted' : ''} ${isSelected ? 'selected' : ''}`;
         col.id = `col-tok-${tokIdx}`;
-        col.title = `Click: Seek (${tok.start}ms) | Alt+Click: Delete/Restore | Double-Click: Edit Phonetics`;
+        col.title = `Click: Seek/Select | Shift+Click: Range | [C]: Comment | Double-Click: Edit Phonetics${tok.comment ? ' | Note: ' + tok.comment : ''}`;
 
         col.onclick = (e) => {
           if (e.altKey) {
@@ -1983,6 +2275,17 @@ EDITOR_HTML = r"""<!DOCTYPE html>
             toggleTokenDeleted(tokIdx);
             return;
           }
+          if (e.shiftKey) {
+            e.stopPropagation();
+            handleTokenShiftSelect(tokIdx);
+            return;
+          }
+          if (e.ctrlKey || e.metaKey) {
+            e.stopPropagation();
+            handleTokenToggleSelect(tokIdx);
+            return;
+          }
+          handleTokenSingleSelect(tokIdx);
           if (wavesurfer && isWaveReady) {
             lineStopTimeSec = tok.end / 1000.0 + 0.08;
             wavesurfer.setTime(tok.start / 1000.0);
@@ -1997,8 +2300,10 @@ EDITOR_HTML = r"""<!DOCTYPE html>
 
         const isBacking = !!ln.is_backing;
         const colorClass = isBacking ? 'backing' : 'lead';
+        const commentBadge = tok.comment ? `<span class="karaoke-col-comment-badge" onclick="event.stopPropagation(); openCommentModal(${tokIdx})" title="${escapeHtml(tok.comment)}">💬</span>` : '';
 
         col.innerHTML = `
+          ${commentBadge}
           <div class="tier-en"><span class="wipe-text ${colorClass}">${tok.en || tok.text}</span></div>
           <div class="tier-py"><span class="wipe-text ${colorClass}">${tok.pinyin || tok.text}</span></div>
           <div class="tier-hz"><span class="wipe-text ${colorClass}">${tok.text}</span></div>
@@ -2017,11 +2322,38 @@ EDITOR_HTML = r"""<!DOCTYPE html>
       toks.forEach((tok, idx) => {
         const tr = document.createElement('tr');
         tr.id = `tbl-tok-${idx}`;
-        if (tok.is_deleted) tr.className = 'deleted';
+        const isSelected = selectedTokenIndices.has(idx);
+        let rowClass = [];
+        if (tok.is_deleted) rowClass.push('deleted');
+        if (isSelected) rowClass.push('selected');
+        tr.className = rowClass.join(' ');
+
+        tr.onclick = (e) => {
+          if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON' || e.target.closest('button') || e.target.closest('.token-pinyin-cell') || e.target.closest('.token-en-cell') || e.target.closest('.token-comment-chip')) {
+            return;
+          }
+          if (e.shiftKey) {
+            handleTokenShiftSelect(idx);
+          } else if (e.ctrlKey || e.metaKey) {
+            handleTokenToggleSelect(idx);
+          } else {
+            handleTokenSingleSelect(idx);
+          }
+        };
 
         const dur = Math.max(0, tok.end - tok.start);
+        const hasComment = !!(tok.comment && tok.comment.trim());
+        const commentHtml = hasComment ?
+          `<span class="token-comment-chip" onclick="openCommentModal(${idx})" title="${escapeHtml(tok.comment)}">💬 ${escapeHtml(tok.comment)}</span>` :
+          `<button class="btn-add-comment-mini" onclick="openCommentModal(${idx})" title="Add analysis comment (C)">+ 💬 Note</button>`;
+
+        const isFirstLine = (activeLineIdx === 0);
+        const isLastLine = (projectData.lines && activeLineIdx >= projectData.lines.length - 1);
 
         tr.innerHTML = `
+          <td style="text-align: center;">
+            <input type="checkbox" class="token-select-cb" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation(); handleCheckboxClick(${idx}, event)">
+          </td>
           <td style="font-family: var(--font-mono); color: var(--text-dim);">${idx + 1}</td>
           <td class="token-text-cell" onclick="seekAndPlayToken(${idx})" title="Click to play syllable">${tok.text}${tok.space ? ' <span style="font-size:11px;color:var(--text-dim);">␣</span>' : ''}</td>
           <td><span class="token-pinyin-cell" onclick="openPhoneticsModal(${idx})" title="Click to override Pinyin / Romanization">${tok.pinyin || '-'}</span></td>
@@ -2029,15 +2361,19 @@ EDITOR_HTML = r"""<!DOCTYPE html>
           <td><input type="number" class="editable-time" value="${tok.start}" onchange="updateTokenTime(${idx}, 'start', this.value)"></td>
           <td><input type="number" class="editable-time" value="${tok.end}" onchange="updateTokenTime(${idx}, 'end', this.value)"></td>
           <td style="font-family: var(--font-mono); color: ${dur < 60 ? 'var(--accent-warn)' : 'var(--text-muted)'};">${dur}ms</td>
-          <td style="display: flex; gap: 4px;">
+          <td>${commentHtml}</td>
+          <td style="display: flex; gap: 4px; align-items: center;">
             <button class="btn" style="padding: 2px 6px; font-size: 11px;" onclick="toggleTokenDeleted(${idx})" title="Toggle Delete/Strikethrough (Alt+Click)">
               ${tok.is_deleted ? '↩ Restore' : '❌ Del'}
             </button>
             ${idx > 0 ? `<button class="btn" style="padding: 2px 6px; font-size: 11px;" onclick="splitLineAtToken(${idx})" title="Split into a new line starting at this syllable">✂ Split</button>` : ''}
+            <button class="btn btn-push" style="padding: 2px 6px; font-size: 11px;" onclick="pushSyllableToPrevLine(${idx})" ${isFirstLine ? 'disabled' : ''} title="${isFirstLine ? 'No previous line' : 'Push syllable into previous line (Line #' + activeLineIdx + ')'}">⬆ Prev</button>
+            <button class="btn btn-push" style="padding: 2px 6px; font-size: 11px;" onclick="pushSyllableToNextLine(${idx})" ${isLastLine ? 'disabled' : ''} title="${isLastLine ? 'No next line' : 'Push syllable into next line (Line #' + (activeLineIdx + 2) + ')'}">⬇ Next</button>
           </td>
         `;
         tbody.appendChild(tr);
       });
+      updateSelectionUI();
     }
 
     function seekAndPlayToken(idx) {
@@ -2094,6 +2430,105 @@ EDITOR_HTML = r"""<!DOCTYPE html>
       recalcLineBounds(newLine);
       projectData.lines.splice(activeLineIdx + 1, 0, newLine);
       selectLine(activeLineIdx + 1, false);
+      showToast(`Split into new Line #${activeLineIdx + 1}`);
+    }
+
+    function pushSyllableToPrevLine(tokIdx) {
+      if (!projectData || !projectData.lines || activeLineIdx <= 0) {
+        showToast("No previous line to push into.");
+        return;
+      }
+      const curLine = projectData.lines[activeLineIdx];
+      const prevLine = projectData.lines[activeLineIdx - 1];
+      if (!curLine || !prevLine) return;
+
+      let moveIndices = [];
+      if (selectedTokenIndices.has(tokIdx) && selectedTokenIndices.size > 0) {
+        moveIndices = Array.from(selectedTokenIndices).sort((a, b) => a - b);
+      } else {
+        moveIndices = [tokIdx];
+      }
+
+      const movingTokens = moveIndices.map(i => curLine.tokens[i]).filter(Boolean);
+      if (!movingTokens.length) return;
+
+      const indicesSet = new Set(moveIndices);
+      curLine.tokens = curLine.tokens.filter((_, i) => !indicesSet.has(i));
+
+      if (!prevLine.tokens) prevLine.tokens = [];
+      prevLine.tokens = prevLine.tokens.concat(movingTokens);
+      prevLine.tokens.sort((a, b) => (a.start || 0) - (b.start || 0));
+
+      recalcLineBounds(prevLine);
+
+      selectedTokenIndices.clear();
+      lastSelectedTokenIdx = null;
+
+      if (curLine.tokens.length === 0) {
+        projectData.lines.splice(activeLineIdx, 1);
+        selectLine(Math.max(0, activeLineIdx - 1), false);
+      } else {
+        recalcLineBounds(curLine);
+        renderActiveLine();
+        renderLinesSidebar();
+        updateWaveformRegions();
+      }
+      showToast(`Pushed ${movingTokens.length} syllable(s) to previous line (#${activeLineIdx})`);
+    }
+
+    function pushSyllableToNextLine(tokIdx) {
+      if (!projectData || !projectData.lines || activeLineIdx >= projectData.lines.length - 1) {
+        showToast("No next line to push into.");
+        return;
+      }
+      const curLine = projectData.lines[activeLineIdx];
+      const nextLine = projectData.lines[activeLineIdx + 1];
+      if (!curLine || !nextLine) return;
+
+      let moveIndices = [];
+      if (selectedTokenIndices.has(tokIdx) && selectedTokenIndices.size > 0) {
+        moveIndices = Array.from(selectedTokenIndices).sort((a, b) => a - b);
+      } else {
+        moveIndices = [tokIdx];
+      }
+
+      const movingTokens = moveIndices.map(i => curLine.tokens[i]).filter(Boolean);
+      if (!movingTokens.length) return;
+
+      const indicesSet = new Set(moveIndices);
+      curLine.tokens = curLine.tokens.filter((_, i) => !indicesSet.has(i));
+
+      if (!nextLine.tokens) nextLine.tokens = [];
+      nextLine.tokens = nextLine.tokens.concat(movingTokens);
+      nextLine.tokens.sort((a, b) => (a.start || 0) - (b.start || 0));
+
+      recalcLineBounds(nextLine);
+
+      selectedTokenIndices.clear();
+      lastSelectedTokenIdx = null;
+
+      if (curLine.tokens.length === 0) {
+        projectData.lines.splice(activeLineIdx, 1);
+        selectLine(Math.min(activeLineIdx, projectData.lines.length - 1), false);
+      } else {
+        recalcLineBounds(curLine);
+        renderActiveLine();
+        renderLinesSidebar();
+        updateWaveformRegions();
+      }
+      showToast(`Pushed ${movingTokens.length} syllable(s) to next line (#${activeLineIdx + 2})`);
+    }
+
+    function pushSelectedToPrevLine() {
+      if (selectedTokenIndices.size === 0) return;
+      const firstIdx = Array.from(selectedTokenIndices).sort((a, b) => a - b)[0];
+      pushSyllableToPrevLine(firstIdx);
+    }
+
+    function pushSelectedToNextLine() {
+      if (selectedTokenIndices.size === 0) return;
+      const firstIdx = Array.from(selectedTokenIndices).sort((a, b) => a - b)[0];
+      pushSyllableToNextLine(firstIdx);
     }
 
     function nudgeActiveLine(deltaMs) {
@@ -2136,6 +2571,501 @@ EDITOR_HTML = r"""<!DOCTYPE html>
       updateWaveformRegions();
     }
 
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function showToast(msg) {
+      let container = document.getElementById('toast-container');
+      if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        document.body.appendChild(container);
+      }
+      const toast = document.createElement('div');
+      toast.className = 'toast-msg';
+      toast.textContent = msg;
+      container.appendChild(toast);
+      setTimeout(() => {
+        if (toast.parentNode) toast.parentNode.removeChild(toast);
+      }, 2800);
+    }
+
+    function updateSelectionUI() {
+      // 1. Table rows
+      const tbody = document.getElementById('syllables-tbody');
+      if (tbody) {
+        Array.from(tbody.children).forEach((tr, idx) => {
+          const isSel = selectedTokenIndices.has(idx);
+          tr.classList.toggle('selected', isSel);
+          const cb = tr.querySelector('.token-select-cb');
+          if (cb) cb.checked = isSel;
+        });
+      }
+
+      // 2. Select All checkbox in table header
+      const selectAllCb = document.getElementById('select-all-cbox');
+      if (selectAllCb && projectData && projectData.lines[activeLineIdx]) {
+        const total = (projectData.lines[activeLineIdx].tokens || []).length;
+        selectAllCb.checked = (total > 0 && selectedTokenIndices.size === total);
+        selectAllCb.indeterminate = (selectedTokenIndices.size > 0 && selectedTokenIndices.size < total);
+      }
+
+      // 3. Karaoke preview columns
+      const container = document.getElementById('karaoke-display');
+      if (container) {
+        Array.from(container.children).forEach((col, idx) => {
+          col.classList.toggle('selected', selectedTokenIndices.has(idx));
+        });
+      }
+
+      // 4. Waveform regions
+      if (wsRegions) {
+        try {
+          wsRegions.getRegions().forEach(reg => {
+            const meta = regionTokenMap.get(reg.id);
+            if (meta) {
+              const isSel = selectedTokenIndices.has(meta.tokIdx);
+              if (reg.element) {
+                reg.element.classList.toggle('region-selected', isSel);
+              }
+            }
+          });
+        } catch (e) {}
+      }
+
+      // 5. Selection status bar
+      const bar = document.getElementById('selection-status-bar');
+      const countEl = document.getElementById('selection-count-text');
+      if (bar && countEl) {
+        if (selectedTokenIndices.size > 0) {
+          bar.style.display = 'inline-flex';
+          countEl.textContent = `${selectedTokenIndices.size} selected`;
+        } else {
+          bar.style.display = 'none';
+        }
+      }
+    }
+
+    function handleTokenSingleSelect(idx) {
+      selectedTokenIndices.clear();
+      selectedTokenIndices.add(idx);
+      lastSelectedTokenIdx = idx;
+      updateSelectionUI();
+    }
+
+    function handleTokenToggleSelect(idx) {
+      if (selectedTokenIndices.has(idx)) {
+        selectedTokenIndices.delete(idx);
+      } else {
+        selectedTokenIndices.add(idx);
+        lastSelectedTokenIdx = idx;
+      }
+      updateSelectionUI();
+    }
+
+    function handleTokenShiftSelect(idx) {
+      if (lastSelectedTokenIdx === null) {
+        selectedTokenIndices.add(idx);
+        lastSelectedTokenIdx = idx;
+      } else {
+        const low = Math.min(lastSelectedTokenIdx, idx);
+        const high = Math.max(lastSelectedTokenIdx, idx);
+        for (let i = low; i <= high; i++) {
+          selectedTokenIndices.add(i);
+        }
+      }
+      updateSelectionUI();
+    }
+
+    function handleCheckboxClick(idx, event) {
+      if (event && event.shiftKey && lastSelectedTokenIdx !== null) {
+        handleTokenShiftSelect(idx);
+      } else {
+        handleTokenToggleSelect(idx);
+      }
+    }
+
+    function toggleSelectAllTokens(isChecked) {
+      if (!projectData || !projectData.lines[activeLineIdx]) return;
+      const ln = projectData.lines[activeLineIdx];
+      const count = (ln.tokens || []).length;
+      selectedTokenIndices.clear();
+      if (isChecked) {
+        for (let i = 0; i < count; i++) {
+          selectedTokenIndices.add(i);
+        }
+        lastSelectedTokenIdx = count - 1;
+      } else {
+        lastSelectedTokenIdx = null;
+      }
+      updateSelectionUI();
+    }
+
+    function clearTokenSelection() {
+      selectedTokenIndices.clear();
+      lastSelectedTokenIdx = null;
+      updateSelectionUI();
+    }
+
+    function setupWaveformShiftSelection() {
+      const container = document.getElementById('waveform-container');
+      if (!container) return;
+
+      let isShiftDragging = false;
+      let startX = 0;
+      const overlay = document.getElementById('waveform-selection-overlay');
+
+      container.addEventListener('mousedown', (e) => {
+        if (e.shiftKey && e.button === 0) {
+          isShiftDragging = true;
+          startX = e.clientX;
+          const rect = container.getBoundingClientRect();
+          const relX = startX - rect.left;
+          if (overlay) {
+            overlay.style.left = `${relX}px`;
+            overlay.style.width = '0px';
+            overlay.style.display = 'block';
+          }
+        }
+      });
+
+      window.addEventListener('mousemove', (e) => {
+        if (!isShiftDragging || !overlay) return;
+        const rect = container.getBoundingClientRect();
+        const curX = Math.max(rect.left, Math.min(rect.right, e.clientX));
+        const left = Math.min(startX, curX) - rect.left;
+        const width = Math.abs(curX - startX);
+        overlay.style.left = `${left}px`;
+        overlay.style.width = `${width}px`;
+      });
+
+      window.addEventListener('mouseup', (e) => {
+        if (!isShiftDragging) return;
+        isShiftDragging = false;
+        if (overlay) overlay.style.display = 'none';
+
+        if (!wsRegions || !projectData || !projectData.lines[activeLineIdx]) return;
+        const minX = Math.min(startX, e.clientX);
+        const maxX = Math.max(startX, e.clientX);
+        if (maxX - minX < 5) return; // Tiny click, handled by region click
+
+        wsRegions.getRegions().forEach(reg => {
+          if (reg.element) {
+            const regRect = reg.element.getBoundingClientRect();
+            if (regRect.right >= minX && regRect.left <= maxX) {
+              const meta = regionTokenMap.get(reg.id);
+              if (meta) {
+                selectedTokenIndices.add(meta.tokIdx);
+                lastSelectedTokenIdx = meta.tokIdx;
+              }
+            }
+          }
+        });
+        updateSelectionUI();
+      });
+    }
+
+    function openCommentModal(tokIdx = null) {
+      if (!projectData || !projectData.lines[activeLineIdx]) return;
+      const ln = projectData.lines[activeLineIdx];
+      const toks = ln.tokens || [];
+
+      if (tokIdx !== null) {
+        if (!selectedTokenIndices.has(tokIdx)) {
+          selectedTokenIndices.clear();
+          selectedTokenIndices.add(tokIdx);
+          lastSelectedTokenIdx = tokIdx;
+          updateSelectionUI();
+        }
+      } else if (selectedTokenIndices.size === 0) {
+        const firstActive = toks.findIndex(t => !t.is_deleted);
+        const target = firstActive >= 0 ? firstActive : 0;
+        selectedTokenIndices.add(target);
+        lastSelectedTokenIdx = target;
+        updateSelectionUI();
+      }
+
+      const indices = Array.from(selectedTokenIndices).sort((a, b) => a - b);
+      const selToks = indices.map(i => toks[i]).filter(Boolean);
+      if (!selToks.length) return;
+
+      const chars = selToks.map(t => t.text).join(' ');
+      const pinyins = selToks.map(t => t.pinyin || '').filter(Boolean).join(' ');
+      const minStart = Math.min(...selToks.map(t => t.start || 0));
+      const maxEnd = Math.max(...selToks.map(t => t.end || 0));
+
+      const infoEl = document.getElementById('comment-modal-target-info');
+      infoEl.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+          <span style="font-weight: 700; color: var(--accent-lead);">Line #${activeLineIdx + 1} • ${selToks.length} Syllable${selToks.length > 1 ? 's' : ''} Selected</span>
+          <span style="font-family: var(--font-mono); color: var(--text-muted); font-size: 11px;">${fmtMs(minStart)} → ${fmtMs(maxEnd)} (${maxEnd - minStart}ms)</span>
+        </div>
+        <div style="font-family: var(--font-cjk); font-size: 16px; font-weight: 700; color: #fff;">${chars} <span style="font-family: var(--font-mono); font-size: 12px; color: var(--accent-lead); font-weight: normal; margin-left: 8px;">[${pinyins}]</span></div>
+      `;
+
+      const existing = selToks.map(t => t.comment).filter(Boolean);
+      const textarea = document.getElementById('comment-textarea');
+      textarea.value = existing.length > 0 ? existing[0] : '';
+
+      const deleteBtn = document.getElementById('btn-delete-comment');
+      deleteBtn.style.display = existing.length > 0 ? 'inline-flex' : 'none';
+
+      document.getElementById('modal-comment').classList.add('open');
+      setTimeout(() => textarea.focus(), 50);
+    }
+
+    function openCommentModalForSelected() {
+      openCommentModal(null);
+    }
+
+    function closeCommentModal() {
+      document.getElementById('modal-comment').classList.remove('open');
+    }
+
+    function insertCommentTag(tag) {
+      const textarea = document.getElementById('comment-textarea');
+      if (textarea.value.trim().length > 0) {
+        textarea.value = `${textarea.value.trim()}; ${tag}`;
+      } else {
+        textarea.value = tag;
+      }
+      textarea.focus();
+    }
+
+    function saveComment() {
+      if (!projectData || !projectData.lines[activeLineIdx]) return;
+      const ln = projectData.lines[activeLineIdx];
+      const toks = ln.tokens || [];
+      const text = document.getElementById('comment-textarea').value.trim();
+
+      const indices = Array.from(selectedTokenIndices);
+      indices.forEach(idx => {
+        if (toks[idx]) {
+          if (text) {
+            toks[idx].comment = text;
+          } else {
+            delete toks[idx].comment;
+          }
+        }
+      });
+
+      closeCommentModal();
+      renderActiveLine();
+      renderLinesSidebar();
+      updateWaveformRegions();
+      showToast(text ? `✅ Saved comment on ${indices.length} syllable(s)` : `Cleared comment on ${indices.length} syllable(s)`);
+    }
+
+    function deleteComment() {
+      if (!projectData || !projectData.lines[activeLineIdx]) return;
+      const ln = projectData.lines[activeLineIdx];
+      const toks = ln.tokens || [];
+      const indices = Array.from(selectedTokenIndices);
+      indices.forEach(idx => {
+        if (toks[idx]) {
+          delete toks[idx].comment;
+        }
+      });
+
+      closeCommentModal();
+      renderActiveLine();
+      renderLinesSidebar();
+      updateWaveformRegions();
+      showToast(`Cleared comment on ${indices.length} syllable(s)`);
+    }
+
+    // Border Resizers
+    let isResizing = false;
+    let resizeType = null;
+    let resizeStartPos = 0;
+    let resizeStartDim = 0;
+    let isRightClickResize = false;
+    let suppressContextMenu = false;
+
+    function initBorderResizers() {
+      const sidebar = document.querySelector('.lines-sidebar');
+      const previewStage = document.querySelector('.preview-stage');
+      const waveformContainer = document.getElementById('waveform-container');
+
+      try {
+        const savedSidebarWidth = localStorage.getItem('singalong_sidebar_width');
+        if (savedSidebarWidth && sidebar) {
+          sidebar.style.width = `${parseInt(savedSidebarWidth, 10)}px`;
+        }
+        const savedPreviewHeight = localStorage.getItem('singalong_preview_height');
+        if (savedPreviewHeight && previewStage) {
+          previewStage.style.height = `${parseInt(savedPreviewHeight, 10)}px`;
+          previewStage.style.maxHeight = 'none';
+        }
+        const savedWaveformHeight = localStorage.getItem('singalong_waveform_height');
+        if (savedWaveformHeight && waveformContainer) {
+          waveformContainer.style.height = `${parseInt(savedWaveformHeight, 10)}px`;
+        }
+      } catch (e) {}
+
+      const resizerSidebar = document.getElementById('resizer-sidebar');
+      const resizerPreview = document.getElementById('resizer-preview');
+      const resizerWaveform = document.getElementById('resizer-waveform');
+
+      function attachResizer(el, type) {
+        if (!el) return;
+        el.addEventListener('mousedown', (e) => {
+          if (e.button === 0 || e.button === 2) {
+            e.preventDefault();
+            startSectionResize(type, e, e.button === 2);
+          }
+        });
+      }
+
+      attachResizer(resizerSidebar, 'sidebar');
+      attachResizer(resizerPreview, 'preview');
+      attachResizer(resizerWaveform, 'waveform');
+
+      // Allow Right-Click and Drag on borders of sections
+      if (sidebar) {
+        sidebar.addEventListener('mousedown', (e) => {
+          if (e.button === 2) {
+            const rect = sidebar.getBoundingClientRect();
+            if (e.clientX >= rect.right - 14 && e.clientX <= rect.right + 6) {
+              e.preventDefault();
+              startSectionResize('sidebar', e, true);
+            }
+          }
+        });
+      }
+
+      if (previewStage) {
+        previewStage.addEventListener('mousedown', (e) => {
+          if (e.button === 2) {
+            const rect = previewStage.getBoundingClientRect();
+            if (e.clientY >= rect.bottom - 14 && e.clientY <= rect.bottom + 6) {
+              e.preventDefault();
+              startSectionResize('preview', e, true);
+            }
+          }
+        });
+      }
+
+      const waveformStage = document.querySelector('.waveform-stage');
+      if (waveformStage) {
+        waveformStage.addEventListener('mousedown', (e) => {
+          if (e.button === 2) {
+            const rect = waveformStage.getBoundingClientRect();
+            if (e.clientY >= rect.bottom - 14 && e.clientY <= rect.bottom + 6) {
+              e.preventDefault();
+              startSectionResize('waveform', e, true);
+            }
+          }
+        });
+      }
+
+      window.addEventListener('contextmenu', (e) => {
+        if (suppressContextMenu || isResizing) {
+          e.preventDefault();
+          suppressContextMenu = false;
+        }
+      }, true);
+    }
+
+    function startSectionResize(type, e, isRightClick) {
+      isResizing = true;
+      resizeType = type;
+      isRightClickResize = isRightClick;
+      if (isRightClick) suppressContextMenu = true;
+
+      const sidebar = document.querySelector('.lines-sidebar');
+      const previewStage = document.querySelector('.preview-stage');
+      const waveformContainer = document.getElementById('waveform-container');
+
+      if (type === 'sidebar') {
+        resizeStartPos = e.clientX;
+        resizeStartDim = sidebar ? sidebar.offsetWidth : 410;
+        document.body.classList.add('is-resizing-col');
+        const gutter = document.getElementById('resizer-sidebar');
+        if (gutter) gutter.classList.add('resizing');
+      } else if (type === 'preview') {
+        resizeStartPos = e.clientY;
+        resizeStartDim = previewStage ? previewStage.offsetHeight : 195;
+        document.body.classList.add('is-resizing-row');
+        const gutter = document.getElementById('resizer-preview');
+        if (gutter) gutter.classList.add('resizing');
+      } else if (type === 'waveform') {
+        resizeStartPos = e.clientY;
+        resizeStartDim = waveformContainer ? waveformContainer.offsetHeight : 102;
+        document.body.classList.add('is-resizing-row');
+        const gutter = document.getElementById('resizer-waveform');
+        if (gutter) gutter.classList.add('resizing');
+      }
+
+      window.addEventListener('mousemove', onSectionResizeMove);
+      window.addEventListener('mouseup', onSectionResizeEnd);
+    }
+
+    function onSectionResizeMove(e) {
+      if (!isResizing) return;
+      e.preventDefault();
+
+      if (resizeType === 'sidebar') {
+        const delta = e.clientX - resizeStartPos;
+        const newWidth = Math.max(220, Math.min(window.innerWidth - 300, resizeStartDim + delta));
+        const sidebar = document.querySelector('.lines-sidebar');
+        if (sidebar) sidebar.style.width = `${newWidth}px`;
+      } else if (resizeType === 'preview') {
+        const delta = e.clientY - resizeStartPos;
+        const newHeight = Math.max(90, Math.min(500, resizeStartDim + delta));
+        const previewStage = document.querySelector('.preview-stage');
+        if (previewStage) {
+          previewStage.style.height = `${newHeight}px`;
+          previewStage.style.maxHeight = 'none';
+        }
+      } else if (resizeType === 'waveform') {
+        const delta = e.clientY - resizeStartPos;
+        const newHeight = Math.max(60, Math.min(320, resizeStartDim + delta));
+        const waveformContainer = document.getElementById('waveform-container');
+        if (waveformContainer) {
+          waveformContainer.style.height = `${newHeight}px`;
+          const wfEl = document.getElementById('waveform');
+          if (wfEl) wfEl.style.height = `${newHeight - 2}px`;
+          if (wavesurfer) {
+            try { wavesurfer.setOptions({ height: newHeight - 4 }); } catch (err) {}
+          }
+        }
+      }
+    }
+
+    function onSectionResizeEnd(e) {
+      if (!isResizing) return;
+      isResizing = false;
+      document.body.classList.remove('is-resizing-col', 'is-resizing-row');
+      document.querySelectorAll('.resizer-gutter').forEach(g => g.classList.remove('resizing'));
+
+      window.removeEventListener('mousemove', onSectionResizeMove);
+      window.removeEventListener('mouseup', onSectionResizeEnd);
+
+      try {
+        const sidebar = document.querySelector('.lines-sidebar');
+        if (sidebar) localStorage.setItem('singalong_sidebar_width', sidebar.offsetWidth);
+
+        const previewStage = document.querySelector('.preview-stage');
+        if (previewStage) localStorage.setItem('singalong_preview_height', previewStage.offsetHeight);
+
+        const waveformContainer = document.getElementById('waveform-container');
+        if (waveformContainer) localStorage.setItem('singalong_waveform_height', waveformContainer.offsetHeight);
+      } catch (e) {}
+
+      setTimeout(() => {
+        suppressContextMenu = false;
+        isRightClickResize = false;
+      }, 120);
+    }
+
     function updateWaveformRegions() {
       if (!wsRegions || !isWaveReady || !projectData || !projectData.lines[activeLineIdx]) return;
       wsRegions.clearRegions();
@@ -2148,21 +3078,31 @@ EDITOR_HTML = r"""<!DOCTYPE html>
         const sSec = tok.start / 1000.0;
         const eSec = Math.max(sSec + 0.03, tok.end / 1000.0);
 
+        const isSelected = selectedTokenIndices.has(idx);
         let color = isBacking ? 'rgba(112, 214, 255, 0.28)' : 'rgba(255, 215, 0, 0.26)';
         if (tok.is_deleted) {
           color = 'rgba(148, 163, 184, 0.10)';
         }
+        if (isSelected) {
+          color = 'rgba(99, 102, 241, 0.45)';
+        }
 
         const regId = `tok-${activeLineIdx}-${idx}`;
+        let label = tok.is_deleted ? `✕${tok.text}` : tok.text;
+        if (tok.comment) label = `💬${label}`;
+
         const reg = wsRegions.addRegion({
           id: regId,
           start: sSec,
           end: eSec,
-          content: tok.is_deleted ? `✕${tok.text}` : tok.text,
+          content: label,
           color: color,
           drag: true,
           resize: true
         });
+        if (isSelected && reg.element) {
+          reg.element.classList.add('region-selected');
+        }
         regionTokenMap.set(regId, { tokIdx: idx, token: tok });
       });
     }
@@ -2619,10 +3559,14 @@ EDITOR_HTML = r"""<!DOCTYPE html>
             closePhoneticsModal();
             closeRenderModal();
             closePipelineModal();
+            closeCommentModal();
             e.target.blur();
           } else if (e.key === 'Enter' && document.getElementById('modal-edit-phonetics').classList.contains('open')) {
             e.preventDefault();
             applyPhoneticsEdit();
+          } else if ((e.key === 'Enter' && (e.ctrlKey || e.metaKey)) && document.getElementById('modal-comment').classList.contains('open')) {
+            e.preventDefault();
+            saveComment();
           }
           return;
         }
@@ -2639,7 +3583,10 @@ EDITOR_HTML = r"""<!DOCTYPE html>
           }
         }
 
-        if (e.code === 'Space') {
+        if (e.key === 'c' || e.key === 'C') {
+          e.preventDefault();
+          openCommentModalForSelected();
+        } else if (e.code === 'Space') {
           e.preventDefault();
           togglePlay();
         } else if (e.key === 'r' || e.key === 'R') {
@@ -2669,6 +3616,9 @@ EDITOR_HTML = r"""<!DOCTYPE html>
         } else if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
           e.preventDefault();
           saveProject();
+        } else if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+          e.preventDefault();
+          toggleSelectAllTokens(true);
         } else if (e.key === 'ArrowUp') {
           e.preventDefault();
           if (activeLineIdx > 0) selectLine(activeLineIdx - 1, true);
@@ -2676,9 +3626,15 @@ EDITOR_HTML = r"""<!DOCTYPE html>
           e.preventDefault();
           if (projectData && activeLineIdx < projectData.lines.length - 1) selectLine(activeLineIdx + 1, true);
         } else if (e.key === 'Escape') {
-          closePhoneticsModal();
-          closeRenderModal();
-          closePipelineModal();
+          if (document.getElementById('modal-comment').classList.contains('open')) {
+            closeCommentModal();
+          } else if (selectedTokenIndices.size > 0) {
+            clearTokenSelection();
+          } else {
+            closePhoneticsModal();
+            closeRenderModal();
+            closePipelineModal();
+          }
         }
       });
     }
