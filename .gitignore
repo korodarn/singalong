@@ -9,6 +9,16 @@ venv/
 env/
 ENV/
 
+# Node / Bun / Web frontend dependencies & build outputs
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+.vite/
+**/.vite/
+.turbo/
+*.tsbuildinfo
+
 # Working directory (downloads, stems, ASR caches, renders)
 /work/*
 !/work/.gitkeep

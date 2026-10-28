@@ -1,0 +1,124 @@
+export interface Token {
+  text: string;
+  start: number;
+  end: number;
+  space?: boolean;
+  is_deleted?: boolean;
+  pinyin?: string;
+  en?: string;
+  comment?: string;
+}
+
+export interface Line {
+  start: number;
+  end: number;
+  is_backing?: boolean;
+  tokens: Token[];
+}
+
+export interface ProjectSummary {
+  id: string;
+  filename: string;
+  num_lines: number;
+  has_audio: boolean;
+  has_vocals: boolean;
+  has_video: boolean;
+}
+
+export interface LintIssue {
+  rule: string;
+  detail: string;
+}
+
+export interface LintReportLine {
+  line_index: number;
+  start: number;
+  end: number;
+  is_backing: boolean;
+  text: string;
+  score: number;
+  issues: LintIssue[];
+}
+
+export interface LintReport {
+  json_path: string;
+  vocals_path: string | null;
+  total_lines: number;
+  flagged_lines: number;
+  total_issues: number;
+  mean_confidence: number;
+  lines: LintReportLine[];
+}
+
+export interface ProjectConfig {
+  video: {
+    width: number;
+    height: number;
+    fps: number;
+    background_color: string;
+  };
+  subtitles: {
+    font_name: string;
+    ruby_columns?: boolean;
+    position: {
+      alignment: string;
+      margin_bottom: number;
+      line_spacing: number;
+    };
+    hanzi: {
+      enabled: boolean;
+      font_size: number;
+      color_unfilled: string;
+      color_filled: string;
+      color_outline: string;
+      outline_width: number;
+      shadow: number;
+      bold: boolean;
+    };
+    pinyin: {
+      enabled: boolean;
+      font_size: number;
+      color_unfilled: string;
+      color_filled: string;
+      color_outline: string;
+      outline_width: number;
+      shadow: number;
+      bold: boolean;
+    };
+    english: {
+      enabled: boolean;
+      font_size: number;
+      color_unfilled: string;
+      color_filled: string;
+      color_outline: string;
+      outline_width: number;
+      shadow: number;
+      bold: boolean;
+    };
+    backing: {
+      placement: string;
+      margin_right: number;
+      margin_bottom: number;
+      margin_left: number;
+      font_scale: number;
+      italic: boolean;
+      color_filled: string;
+      color_unfilled: string;
+      color_outline: string;
+      prefix: string;
+      suffix: string;
+    };
+  };
+}
+
+export interface ProjectData {
+  exists: boolean;
+  video_id: string;
+  lines: Line[];
+  config: ProjectConfig;
+  lint: LintReport | null;
+  custom_dict: Record<string, Record<string, { pinyin: string; en: string }>>;
+  has_vocals: boolean;
+  has_mix: boolean;
+  has_video: boolean;
+}
