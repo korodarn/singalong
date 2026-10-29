@@ -19,6 +19,9 @@ export interface Line {
 export interface ProjectSummary {
   id: string;
   filename: string;
+  title?: string;
+  artist?: string;
+  duration?: number;
   num_lines: number;
   has_audio: boolean;
   has_vocals: boolean;
@@ -114,6 +117,12 @@ export interface ProjectConfig {
 export interface ProjectData {
   exists: boolean;
   video_id: string;
+  metadata?: {
+    video_id: string;
+    title: string;
+    artist: string;
+    duration?: number;
+  };
   lines: Line[];
   config: ProjectConfig;
   lint: LintReport | null;
@@ -121,4 +130,36 @@ export interface ProjectData {
   has_vocals: boolean;
   has_mix: boolean;
   has_video: boolean;
+}
+
+export interface ScriptDistribution {
+  total_chars: number;
+  latin_ratio: number;
+  han_ratio: number;
+  hangul_ratio: number;
+  kana_ratio: number;
+  dominant: string;
+}
+
+export interface LyricsValidation {
+  is_valid: boolean;
+  reason: string;
+  score: number;
+}
+
+export interface LyricsCandidate {
+  id: string;
+  source: string;
+  title: string;
+  artist: string;
+  album: string;
+  duration: number;
+  is_synced: boolean;
+  synced_lyrics: string;
+  plain_lyrics: string;
+  raw_lyrics: string;
+  clean_lyrics?: string;
+  line_count: number;
+  script?: ScriptDistribution;
+  validation: LyricsValidation;
 }

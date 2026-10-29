@@ -34,6 +34,28 @@ export const WaveformPane: Component<{
     ws.play();
   };
 
+  const togglePlay = () => {
+    if (!ws || !isWaveReady) return;
+    if (ws.isPlaying()) {
+      stopAtSec = null;
+      ws.pause();
+    } else {
+      const sel = store.selectedTokenIndices();
+      const line = store.lines()[store.activeLineIdx()];
+      if (sel.length > 0 && line) {
+        const toks = sel.map((i) => line.tokens[i]).filter((t) => t && !t.is_deleted);
+        if (toks.length > 0) {
+          const startMs = Math.min(...toks.map((t) => t.start));
+          const endMs = Math.max(...toks.map((t) => t.end));
+          playBounds(startMs, endMs + 60);
+          return;
+        }
+      }
+      stopAtSec = null;
+      ws.play();
+    }
+  };
+
   const playActiveLine = () => {
     const cur = store.lines()[store.activeLineIdx()];
     if (!cur || !ws || !isWaveReady) return;
@@ -366,9 +388,14 @@ export const WaveformPane: Component<{
       if (e.key === 'c' || e.key === 'C') {
         e.preventDefault();
         store.openCommentModal();
+      } else if (e.key === 'x' || e.key === 'X') {
+        if (store.selectedTokenIndices().length > 0) {
+          e.preventDefault();
+          store.clearTokenSelection();
+        }
       } else if (e.code === 'Space') {
         e.preventDefault();
-        ws?.playPause();
+        togglePlay();
       } else if (e.key === 'r' || e.key === 'R') {
         e.preventDefault();
         playActiveLine();
@@ -436,7 +463,7 @@ export const WaveformPane: Component<{
       <section class="waveform-container">
         <div class="waveform-toolbar">
           <div class="waveform-controls">
-            <button class="btn btn-primary" onClick={() => ws?.playPause()} title="Play / Pause continuous audio (Spacebar)">
+            <button class="btn btn-primary" onClick={togglePlay} title="Play / Pause (Spacebar)">
               {store.isPlaying() ? '⏸ Pause (Space)' : '▶ Play (Space)'}
             </button>
             <button class="btn" onClick={playActiveLine} title="Play only the active line and stop at its end (R)">
@@ -615,8 +642,8 @@ export const WaveformPane: Component<{
               >
                 ❌ Delete / Restore
               </button>
-              <button class="btn btn-sm" onClick={() => store.clearTokenSelection()} title="Clear selection (Esc)">
-                ✕
+              <button class="btn btn-sm" onClick={() => store.clearTokenSelection()} title="Deselect all syllables (X or Esc)">
+                ✕ Deselect (X)
               </button>
             </div>
           </Show>

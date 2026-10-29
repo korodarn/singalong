@@ -1,4 +1,4 @@
-import { Component, For, Show, createEffect } from 'solid-js';
+import { Component, For, Show, createEffect, createSignal } from 'solid-js';
 import { store, fmtMs } from '../state/store';
 
 export const LyricTable: Component<{
@@ -6,6 +6,15 @@ export const LyricTable: Component<{
   onPlayBounds: (startMs: number, endMs?: number) => void;
 }> = (props) => {
   let tableContainerRef!: HTMLDivElement;
+  let wheelDebounceTimer: any = null;
+
+  const [dragInfo, setDragInfo] = createSignal<{
+    lineIdx: number;
+    tokenIndices: number[];
+    deltaMs: number;
+    previewStartMs: number;
+    previewEndMs: number;
+  } | null>(null);
 
   // Auto-scroll active row into view when activeLineIdx changes
   createEffect(() => {
@@ -22,8 +31,158 @@ export const LyricTable: Component<{
     return lintLines[lineIdx].issues || [];
   };
 
+  const startTokenDrag = (
+    e: MouseEvent,
+    lineIdx: number,
+    tokIdx: number,
+    tok: any,
+    isSelected: boolean
+  ) => {
+    if (e.button !== 0) return;
+
+    const targetEl = e.target as HTMLElement;
+    if (targetEl.closest('.tok-act-btn') || targetEl.closest('.tok-comment-dot')) {
+      return;
+    }
+
+    if (e.altKey) {
+      e.stopPropagation();
+      store.toggleTokenDeleted(lineIdx, tokIdx);
+      return;
+    }
+    if (e.shiftKey) {
+      e.stopPropagation();
+      if (store.activeLineIdx() !== lineIdx) store.setActiveLineIdx(lineIdx);
+      store.shiftSelectToken(tokIdx);
+      return;
+    }
+    if (e.ctrlKey || e.metaKey) {
+      e.stopPropagation();
+      if (store.activeLineIdx() !== lineIdx) store.setActiveLineIdx(lineIdx);
+      store.toggleSelectToken(tokIdx);
+      return;
+    }
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (store.activeLineIdx() !== lineIdx) {
+      store.setActiveLineIdx(lineIdx);
+    }
+
+    if (!isSelected) {
+      store.selectSingleToken(tokIdx);
+    }
+
+    const sel = store.selectedTokenIndices();
+    const targetIndices = sel.includes(tokIdx) ? [...sel] : [tokIdx];
+    const curLine = store.lines()[lineIdx];
+    if (!curLine) return;
+
+    const targetTokens = targetIndices.map((i) => curLine.tokens[i]).filter(Boolean);
+    const initialStartMs = Math.min(...targetTokens.map((t) => t.start));
+    const initialEndMs = Math.max(...targetTokens.map((t) => t.end));
+
+    const startX = e.clientX;
+    let didDrag = false;
+    let accumulatedDeltaMs = 0;
+
+    const onMouseMove = (ev: MouseEvent) => {
+      const distPx = ev.clientX - startX;
+      if (!didDrag && Math.abs(distPx) > 3) {
+        didDrag = true;
+      }
+      if (didDrag) {
+        // Slow and fine: 3ms per pixel drag
+        accumulatedDeltaMs = Math.round(distPx * 3);
+        const curStart = Math.max(0, initialStartMs + accumulatedDeltaMs);
+        const curEnd = Math.max(curStart + 30, initialEndMs + accumulatedDeltaMs);
+        setDragInfo({
+          lineIdx,
+          tokenIndices: targetIndices,
+          deltaMs: accumulatedDeltaMs,
+          previewStartMs: curStart,
+          previewEndMs: curEnd,
+        });
+        props.onSeekTo(curStart);
+      }
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+
+      if (didDrag) {
+        setDragInfo(null);
+        if (accumulatedDeltaMs !== 0) {
+          store.shiftTokens(lineIdx, targetIndices, accumulatedDeltaMs, true);
+        }
+        const finalStart = Math.max(0, initialStartMs + accumulatedDeltaMs);
+        const finalEnd = Math.max(finalStart + 30, initialEndMs + accumulatedDeltaMs);
+        props.onPlayBounds(finalStart, finalEnd + 80);
+      } else {
+        // Just clicked without dragging:
+        // If there was a multi-selection, a clean click collapses it to this single token
+        if (sel.length > 1) {
+          store.selectSingleToken(tokIdx);
+        }
+        props.onPlayBounds(tok.start, tok.end + 80);
+      }
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
+  const handleTokenWheel = (e: WheelEvent, lineIdx: number, tokIdx: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (store.activeLineIdx() !== lineIdx) {
+      store.setActiveLineIdx(lineIdx);
+    }
+
+    const sel = store.selectedTokenIndices();
+    const targetIndices = sel.includes(tokIdx) ? sel : [tokIdx];
+
+    // deltaY < 0 = scroll UP = extend duration (+25ms)
+    // deltaY > 0 = scroll DOWN = reduce duration (-25ms)
+    const deltaEndMs = e.deltaY < 0 ? 25 : -25;
+    store.adjustTokenDuration(lineIdx, targetIndices, deltaEndMs, true);
+
+    const curLine = store.lines()[lineIdx];
+    if (curLine) {
+      const toks = targetIndices.map((i) => curLine.tokens[i]).filter(Boolean);
+      if (toks.length > 0) {
+        const minS = Math.min(...toks.map((t) => t.start));
+        const maxE = Math.max(...toks.map((t) => t.end));
+        props.onSeekTo(maxE);
+
+        clearTimeout(wheelDebounceTimer);
+        wheelDebounceTimer = setTimeout(() => {
+          props.onPlayBounds(minS, maxE + 80);
+        }, 180);
+      }
+    }
+  };
+
   return (
     <div ref={tableContainerRef} class="table-container">
+      <Show when={dragInfo()}>
+        <div class="drag-preview-banner">
+          <span>
+            ↔ Shifting {dragInfo()!.tokenIndices.length} syllable(s):{' '}
+            <strong style={{ color: dragInfo()!.deltaMs >= 0 ? '#38ef7d' : '#ff9f43' }}>
+              {dragInfo()!.deltaMs >= 0 ? '+' : ''}{dragInfo()!.deltaMs}ms
+            </strong>{' '}
+            (Preview: {fmtMs(dragInfo()!.previewStartMs)} → {fmtMs(dragInfo()!.previewEndMs)})
+          </span>
+          <span style={{ 'font-size': '11px', color: 'var(--text-muted)' }}>
+            Release mouse to drop & listen
+          </span>
+        </div>
+      </Show>
+
       <table class="lyrics-table">
         <thead>
           <tr>
@@ -33,7 +192,7 @@ export const LyricTable: Component<{
             <th>
               Syllables, Pinyin & US Phonetics{' '}
               <span style={{ 'font-weight': 'normal', color: 'var(--text-dim)', 'margin-left': '8px' }}>
-                (Click: Select/Play • Shift+Click: Range • Hover chip for ⬆ Prev / ✂ Split / ⬇ Next / 💬 Note • Double-Click: Edit Phonetics)
+                (Click: Select • Space: Play selection • Drag chip: Fine shift • Wheel on chip: Expand/trim tail • Double-Click: Edit Phonetics)
               </span>
             </th>
           </tr>
@@ -51,8 +210,12 @@ export const LyricTable: Component<{
                 <tr
                   id={`line-row-${lineIdx()}`}
                   class={`table-row ${isActiveLine() ? 'row-active' : ''}`}
-                  onClick={() => {
-                    store.setActiveLineIdx(lineIdx());
+                  onClick={(e) => {
+                    const targetEl = e.target as HTMLElement;
+                    if (!targetEl.closest('.tok-chip') && !targetEl.closest('button')) {
+                      store.setActiveLineIdx(lineIdx());
+                      store.clearTokenSelection();
+                    }
                   }}
                 >
                   <td class="col-idx">#{String(lineIdx() + 1).padStart(2, '0')}</td>
@@ -116,32 +279,14 @@ export const LyricTable: Component<{
                               class={`tok-chip ${tok.space ? 'tok-space' : ''} ${tok.is_deleted ? 'tok-deleted' : ''} ${
                                 isSelected() ? 'tok-selected' : ''
                               } ${isPlayingNow() ? 'tok-playing' : ''}`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (store.activeLineIdx() !== lineIdx()) {
-                                  store.setActiveLineIdx(lineIdx());
-                                }
-                                if (e.altKey) {
-                                  store.toggleTokenDeleted(lineIdx(), tokIdx());
-                                  return;
-                                }
-                                if (e.shiftKey) {
-                                  store.shiftSelectToken(tokIdx());
-                                  return;
-                                }
-                                if (e.ctrlKey || e.metaKey) {
-                                  store.toggleSelectToken(tokIdx());
-                                  return;
-                                }
-                                store.selectSingleToken(tokIdx());
-                                props.onPlayBounds(tok.start, tok.end + 80);
-                              }}
+                              onMouseDown={(e) => startTokenDrag(e, lineIdx(), tokIdx(), tok, isSelected())}
+                              onWheel={(e) => handleTokenWheel(e, lineIdx(), tokIdx())}
                               onDblClick={(e) => {
                                 e.stopPropagation();
                                 store.setActiveLineIdx(lineIdx());
                                 store.setEditingToken({ lineIdx: lineIdx(), tokenIdx: tokIdx(), token: tok });
                               }}
-                              title={`[${tok.start}ms..${tok.end}ms (${tok.end - tok.start}ms)] Click: Select & Play | Shift+Click: Range | Alt+Click: Delete | Double-Click: Edit Phonetics${
+                              title={`[${tok.start}ms..${tok.end}ms (${tok.end - tok.start}ms)] Left-drag: Shift timing | Wheel: Expand/trim duration | Double-click: Edit Phonetics${
                                 tok.comment ? ' | Note: ' + tok.comment : ''
                               }`}
                             >

@@ -157,6 +157,8 @@ cd web && bun install && bunx tsc --noEmit && bun run build
 
 ### Phase 3: Multi-Source Lyrics, Upfront Sense-Checking & Pre-JSON Preview/Drop-In
 
+**Status:** ✅ Completed
+
 **Objective:** Fix the `15ozx-3FuAs` failure mode by adding multi-provider search, upfront language/script sense-checking, a pre-alignment **Lyrics Preview & Manual Paste/Edit step** in the editor, and plain-text forced alignment when timestamps aren't available.
 
 #### Tasks:

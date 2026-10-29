@@ -32,6 +32,12 @@ if VENV_PYTHON.exists() and Path(sys.executable).resolve() != VENV_PYTHON.resolv
 
 from core.linter import lint_project
 from core.phonetics import load_custom_dict, save_custom_dict
+from core.lyrics import (
+    search_all_lyrics,
+    parse_lrc,
+    detect_script_distribution,
+    validate_lyrics_candidate,
+)
 
 CONFIG_PATH = Path("config.json")
 DEFAULT_WORKDIR = Path("work")
@@ -59,13 +65,32 @@ def find_projects(workdir: Path = DEFAULT_WORKDIR) -> list[dict]:
         return []
     projects = []
     for p in sorted(workdir.glob("*.json")):
-        if p.name.endswith(".asr.json") or p.name.endswith(".bak") or p.name.endswith(".tmp"):
+        if (
+            p.name.startswith(".")
+            or p.name.endswith(".asr.json")
+            or p.name.endswith(".bak")
+            or p.name.endswith(".tmp")
+            or p.name.endswith(".meta.json")
+        ):
             continue
         vid = p.stem
         wav_path = workdir / f"{vid}.wav"
         vocals_path = workdir / "htdemucs" / vid / "vocals.wav"
         webm_path = workdir / f"{vid}.webm"
         mp4_path = workdir / f"{vid}.mp4"
+        meta_path = workdir / f"{vid}.meta.json"
+
+        title = vid
+        artist = ""
+        duration = 0
+        if meta_path.exists():
+            try:
+                m_data = json.loads(meta_path.read_text(encoding="utf-8"))
+                title = m_data.get("title", vid)
+                artist = m_data.get("artist", "")
+                duration = m_data.get("duration", 0)
+            except Exception:
+                pass
 
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
@@ -76,6 +101,9 @@ def find_projects(workdir: Path = DEFAULT_WORKDIR) -> list[dict]:
         projects.append({
             "id": vid,
             "filename": p.name,
+            "title": title,
+            "artist": artist,
+            "duration": duration,
             "num_lines": num_lines,
             "has_audio": wav_path.exists(),
             "has_vocals": vocals_path.exists(),
@@ -115,10 +143,22 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
             elif path == "/api/pipeline/run":
                 url_or_vid = query.get("url", [""])[0].strip()
                 custom_query = query.get("query", [""])[0].strip()
+                target_lang = query.get("target_lang", [""])[0].strip() or None
+                lyrics_file = query.get("lyrics_file", [""])[0].strip() or None
                 skip_demucs = query.get("skip_demucs", ["0"])[0] in ("1", "true")
                 skip_netease = query.get("skip_netease", ["0"])[0] in ("1", "true")
                 force_lrc = query.get("force_lrc", ["0"])[0] in ("1", "true")
-                self.serve_pipeline_sse(url_or_vid, custom_query, skip_demucs, skip_netease, force_lrc)
+                preview_only = query.get("preview_only", ["0"])[0] in ("1", "true")
+                self.serve_pipeline_sse(
+                    url_or_vid,
+                    custom_query,
+                    skip_demucs,
+                    skip_netease,
+                    force_lrc,
+                    target_lang,
+                    lyrics_file,
+                    preview_only,
+                )
             elif path.startswith("/api/project/"):
                 parts = path.strip("/").split("/")
                 if len(parts) >= 3:
@@ -166,10 +206,63 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
                 self.handle_project_save(vid)
             elif len(parts) >= 4 and parts[3] == "dict":
                 self.handle_dict_update()
+            elif len(parts) >= 4 and parts[3] == "meta":
+                self.handle_meta_update(vid)
             else:
                 self.send_error(404, "Endpoint not found")
         elif path == "/api/dict":
             self.handle_dict_update()
+        elif path == "/api/lyrics/search":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            try:
+                payload = json.loads(body.decode("utf-8"))
+                query = payload.get("query", "")
+                url = payload.get("url", "")
+                target_lang = payload.get("target_lang")
+                candidates = search_all_lyrics(
+                    query=query,
+                    url_or_vid=url,
+                    target_lang=target_lang,
+                    workdir=self.server.workdir,
+                )
+                self.send_json({"ok": True, "candidates": candidates})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, status=500)
+        elif path == "/api/lyrics/validate":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            try:
+                payload = json.loads(body.decode("utf-8"))
+                raw_text = payload.get("raw_text", "")
+                target_lang = payload.get("target_lang")
+                script_info = detect_script_distribution(raw_text)
+                parsed = parse_lrc(raw_text)
+                is_valid, reason, score = validate_lyrics_candidate(raw_text, target_lang=target_lang)
+                preview_lines = [p["text"] for p in parsed[:8]] if parsed else [l.strip() for l in raw_text.splitlines() if l.strip()][:8]
+                self.send_json({
+                    "ok": True,
+                    "script": script_info,
+                    "is_synced": bool(parsed),
+                    "line_count": len(parsed) if parsed else len(raw_text.splitlines()),
+                    "preview_lines": preview_lines,
+                    "validation": {"is_valid": is_valid, "reason": reason, "score": score},
+                })
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, status=500)
+        elif path == "/api/pipeline/prepare_lyrics":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            try:
+                payload = json.loads(body.decode("utf-8"))
+                raw_text = payload.get("raw_text", "")
+                vid = payload.get("video_id") or "custom"
+                clean_vid = re.sub(r"[^A-Za-z0-9_-]", "", vid)[:24]
+                tmp_path = self.server.workdir / f".tmp_{clean_vid}_lyrics.txt"
+                tmp_path.write_text(raw_text, encoding="utf-8")
+                self.send_json({"ok": True, "lyrics_file": str(tmp_path)})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, status=500)
         else:
             self.send_error(404, "Not Found")
 
@@ -247,9 +340,18 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
         cfg = load_config()
         custom_dict = load_custom_dict()
 
+        meta_path = self.server.workdir / f"{vid}.meta.json"
+        metadata = {"video_id": vid, "title": vid, "artist": "", "duration": 0}
+        if meta_path.exists():
+            try:
+                metadata.update(json.loads(meta_path.read_text(encoding="utf-8")))
+            except Exception:
+                pass
+
         response = {
             "exists": True,
             "video_id": vid,
+            "metadata": metadata,
             "lines": lines,
             "config": cfg,
             "lint": lint_report,
@@ -259,6 +361,27 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
             "has_video": (self.server.workdir / f"{vid}.webm").exists() or (self.server.workdir / f"{vid}.mp4").exists(),
         }
         self.send_json(response)
+
+    def handle_meta_update(self, vid: str):
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length)
+        try:
+            payload = json.loads(body.decode("utf-8"))
+            meta_path = self.server.workdir / f"{vid}.meta.json"
+            current = {"video_id": vid, "title": vid, "artist": "", "duration": 0}
+            if meta_path.exists():
+                try:
+                    current.update(json.loads(meta_path.read_text(encoding="utf-8")))
+                except Exception:
+                    pass
+            if "title" in payload:
+                current["title"] = str(payload["title"]).strip()
+            if "artist" in payload:
+                current["artist"] = str(payload["artist"]).strip()
+            meta_path.write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
+            self.send_json({"ok": True, "metadata": current})
+        except Exception as e:
+            self.send_json({"ok": False, "error": str(e)}, status=400)
 
     def handle_project_save(self, vid: str):
         json_path = self.server.workdir / f"{vid}.json"
@@ -410,7 +533,17 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
         except Exception:
             pass
 
-    def serve_pipeline_sse(self, url_or_vid: str, custom_query: str, skip_demucs: bool, skip_netease: bool, force_lrc: bool):
+    def serve_pipeline_sse(
+        self,
+        url_or_vid: str,
+        custom_query: str,
+        skip_demucs: bool,
+        skip_netease: bool,
+        force_lrc: bool,
+        target_lang: str | None = None,
+        lyrics_file: str | None = None,
+        preview_only: bool = False,
+    ):
         self.close_connection = True
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -434,12 +567,18 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
         cmd = [sys.executable, "-u", "singalong.py", url_or_vid, "--workdir", str(self.server.workdir)]
         if custom_query:
             cmd.extend(["--query", custom_query])
+        if target_lang:
+            cmd.extend(["--target-lang", target_lang])
+        if lyrics_file:
+            cmd.extend(["--lyrics-file", lyrics_file])
         if skip_demucs:
             cmd.append("--skip-demucs")
         if skip_netease:
             cmd.append("--skip-netease")
         if force_lrc:
             cmd.append("--force-lrc")
+        if preview_only:
+            cmd.append("--preview-only")
 
         send_event("start", {"command": " ".join(cmd)})
 
@@ -470,9 +609,19 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
 
             proc.wait()
             ret = proc.returncode
+            preview_data = None
+            if preview_only and resolved_vid:
+                preview_path = self.server.workdir / f".preview_{resolved_vid}.json"
+                if preview_path.exists():
+                    try:
+                        preview_data = json.loads(preview_path.read_text(encoding="utf-8"))
+                    except Exception:
+                        pass
             send_event("complete", {
                 "returncode": ret,
                 "video_id": resolved_vid,
+                "preview_only": preview_only,
+                "preview": preview_data,
             })
         except Exception as e:
             send_event("error", {"message": str(e)})

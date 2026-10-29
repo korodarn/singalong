@@ -500,6 +500,39 @@ function createAppStore() {
     setLines(lns);
   }
 
+  function shiftTokens(lineIdx: number, tokenIndices: number[], deltaMs: number, recordUndo = true) {
+    if (!tokenIndices.length || deltaMs === 0) return;
+    if (recordUndo) pushUndo();
+    const lns = JSON.parse(JSON.stringify(lines())) as Line[];
+    const curLine = lns[lineIdx];
+    if (!curLine) return;
+    const indicesSet = new Set(tokenIndices);
+    curLine.tokens.forEach((t, i) => {
+      if (indicesSet.has(i)) {
+        t.start = Math.max(0, t.start + deltaMs);
+        t.end = Math.max(t.start + 20, t.end + deltaMs);
+      }
+    });
+    recalcLineBounds(curLine);
+    setLines(lns);
+  }
+
+  function adjustTokenDuration(lineIdx: number, tokenIndices: number[], deltaEndMs: number, recordUndo = true) {
+    if (!tokenIndices.length || deltaEndMs === 0) return;
+    if (recordUndo) pushUndo();
+    const lns = JSON.parse(JSON.stringify(lines())) as Line[];
+    const curLine = lns[lineIdx];
+    if (!curLine) return;
+    const indicesSet = new Set(tokenIndices);
+    curLine.tokens.forEach((t, i) => {
+      if (indicesSet.has(i)) {
+        t.end = Math.max(t.start + 25, t.end + deltaEndMs);
+      }
+    });
+    recalcLineBounds(curLine);
+    setLines(lns);
+  }
+
   // Tap-Along helpers with backup/cancel
   function startTapAlongSession() {
     const curLine = lines()[activeLineIdx()];
@@ -610,6 +643,8 @@ function createAppStore() {
     realignLineUniform,
     updateTokenPhonetics,
     updateTokenTimes,
+    shiftTokens,
+    adjustTokenDuration,
   };
 }
 

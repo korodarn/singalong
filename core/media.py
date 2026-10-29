@@ -23,18 +23,46 @@ def extract_youtube_id(url_or_vid: str) -> str | None:
 
 def download_audio(url_or_vid: str, workdir: Path):
     cand_id = extract_youtube_id(url_or_vid)
+    meta_path = workdir / f"{cand_id}.meta.json" if cand_id else None
+
     if cand_id and (workdir / f"{cand_id}.wav").exists():
-        print(f"[1/4] Reusing local audio for ID {cand_id}: {workdir / f'{cand_id}.wav'}")
-        return cand_id, cand_id, workdir / f"{cand_id}.wav"
+        title = cand_id
+        if meta_path and meta_path.exists():
+            try:
+                import json
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                title = meta.get("title", cand_id)
+            except Exception:
+                pass
+        print(f"[1/4] Reusing local audio for {cand_id}: '{title}'")
+        return cand_id, title, workdir / f"{cand_id}.wav"
 
     target_url = f"https://www.youtube.com/watch?v={cand_id}" if cand_id else url_or_vid.strip()
     out = subprocess.run(
-        [sys.executable, "-m", "yt_dlp", "--no-playlist", "--print", "%(id)s\t%(title)s", "--", target_url],
+        [sys.executable, "-m", "yt_dlp", "--no-playlist", "--print", "%(id)s\t%(title)s\t%(uploader)s\t%(duration)s", "--", target_url],
         check=True, capture_output=True, text=True,
     ).stdout.strip().splitlines()[-1]
-    parts = out.split("\t", 1)
+    parts = out.split("\t")
     vid = parts[0]
-    title = parts[1] if len(parts) > 1 else vid
+    title = parts[1] if len(parts) > 1 and parts[1] else vid
+    artist = parts[2] if len(parts) > 2 and parts[2] else ""
+    try:
+        duration = float(parts[3]) if len(parts) > 3 and parts[3] else 0
+    except ValueError:
+        duration = 0
+
+    # Save metadata cache
+    try:
+        import json
+        m_file = workdir / f"{vid}.meta.json"
+        m_file.write_text(json.dumps({
+            "video_id": vid,
+            "title": title,
+            "artist": artist,
+            "duration": duration,
+        }, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
 
     wav = workdir / f"{vid}.wav"
     if wav.exists():
