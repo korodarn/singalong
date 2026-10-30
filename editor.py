@@ -208,15 +208,20 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
 
         if path.startswith("/api/project/"):
             parts = path.strip("/").split("/")
-            if len(parts) >= 4 and parts[3] == "save":
+            if len(parts) >= 4:
                 vid = parts[2]
-                self.handle_project_save(vid)
-            elif len(parts) >= 4 and parts[3] == "dict":
-                self.handle_dict_update()
-            elif len(parts) >= 4 and parts[3] == "meta":
-                self.handle_meta_update(vid)
+                action = parts[3]
+                if action == "save":
+                    self.handle_project_save(vid)
+                elif action == "dict":
+                    self.handle_dict_update()
+                elif action == "meta":
+                    self.handle_meta_update(vid)
+                else:
+                    self.send_error(404, "Endpoint not found")
             else:
-                self.send_error(404, "Endpoint not found")
+                self.send_error(400, "Missing parameters")
+
         elif path == "/api/bg-media/download":
             self.handle_bg_media_download()
         elif path == "/api/bg-media/local":
