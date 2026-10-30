@@ -38,6 +38,11 @@ def main():
                     help="custom query/title for lyrics lookup")
     ap.add_argument("--target-lang", default=None,
                     help="expected language: en, zh, ja, ko, or auto")
+    ap.add_argument("--asr-engine", default="auto",
+                    choices=["auto", "paraformer", "whisper", "sensevoice"],
+                    help="ASR engine: auto, paraformer (Mandarin), whisper (EN/JA/KO), or sensevoice")
+    ap.add_argument("--force-asr", action="store_true",
+                    help="force re-running ASR even if cached timestamps exist")
     ap.add_argument("--lyrics-file", default=None, type=Path,
                     help="path to explicit user-provided or cached lyrics file (LRC or TXT)")
     ap.add_argument("--preview-only", action="store_true",
@@ -60,8 +65,16 @@ def main():
     print(f"[RESOLVED_VID] {vid}", flush=True)
 
     src = wav if args.skip_demucs else isolate_vocals(wav, args.workdir, args.device)
-    text, stamps = transcribe(src, args.workdir, vid, args.device)
-    raw_tokens = build_tokens(text, stamps)
+    text, stamps = transcribe(
+        src,
+        args.workdir,
+        vid,
+        args.device,
+        engine=args.asr_engine,
+        lang=args.target_lang,
+        force_asr=args.force_asr,
+    )
+    raw_tokens = build_tokens(text, stamps, lang=args.target_lang)
 
     # Pre-JSON Preview Mode: discover & sense-check lyrics against ASR and stop before alignment
     if args.preview_only:
@@ -208,7 +221,7 @@ def main():
         lines = align_plain_lyrics_with_tokens(chosen_plain, raw_tokens, analyzer)
     else:
         print("[4/4] Building phonetics (unconstrained ASR fallback)...")
-        add_phonetics(raw_tokens)
+        add_phonetics(raw_tokens, lang=args.target_lang)
         lines = group_lines(raw_tokens)
 
     jpath, tpath = write_outputs(vid, lines, args.workdir)

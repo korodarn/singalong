@@ -144,19 +144,50 @@ def load_config(config_path: Path | None) -> dict:
     return cfg
 
 
-def generate_ass(lines: list, cfg: dict, ass_path: Path):
+def _resolve_cjk_font(preferred: str, fallback: str = "Source Han Sans CN") -> str:
+    try:
+        out = subprocess.check_output(["fc-list", f":family={preferred}", "family"], text=True, timeout=2)
+        if out.strip():
+            return preferred
+    except Exception:
+        pass
+    return fallback
+
+
+def generate_ass(lines: list, cfg: dict, ass_path: Path, tier_mode: str | int | None = None):
     v_cfg = cfg["video"]
-    s_cfg = cfg["subtitles"]
+    s_cfg = json.loads(json.dumps(cfg["subtitles"]))
     pos = s_cfg["position"]
     font = s_cfg["font_name"]
     use_ruby = s_cfg.get("ruby_columns", True)
+
+    # Apply tier_mode override if specified (1 / 'single_tier', 2 / 'two_tier', 3 / 'multi_tier')
+    effective_tier = tier_mode or s_cfg.get("tier_mode", "multi_tier")
+    if str(effective_tier) in ("1", "single_tier"):
+        s_cfg["hanzi"]["enabled"] = True
+        s_cfg["pinyin"]["enabled"] = False
+        s_cfg["english"]["enabled"] = False
+    elif str(effective_tier) in ("2", "two_tier"):
+        s_cfg["hanzi"]["enabled"] = True
+        s_cfg["pinyin"]["enabled"] = True
+        s_cfg["english"]["enabled"] = False
+    elif str(effective_tier) in ("3", "multi_tier"):
+        s_cfg["hanzi"]["enabled"] = True
+        s_cfg["pinyin"]["enabled"] = True
+        s_cfg["english"]["enabled"] = True
 
     has_korean = any(
         any(0xAC00 <= ord(c) <= 0xD7A3 for c in t.get("text", ""))
         for ln in lines for t in ln.get("tokens", [])
     )
+    has_japanese = any(
+        any(0x3040 <= ord(c) <= 0x30FF for c in t.get("text", ""))
+        for ln in lines for t in ln.get("tokens", [])
+    )
     if has_korean and font == "Source Han Sans CN":
-        font = "Source Han Sans KR"
+        font = _resolve_cjk_font("Source Han Sans KR", "Source Han Sans CN")
+    elif has_japanese and font == "Source Han Sans CN":
+        font = _resolve_cjk_font("Source Han Sans JP", "Source Han Sans CN")
 
     width = v_cfg["width"]
     height = v_cfg["height"]
@@ -305,11 +336,18 @@ def generate_ass(lines: list, cfg: dict, ass_path: Path):
         en_style = "English_Backing" if is_backing else "English"
 
         is_foreign = any(
-            any(0x4E00 <= ord(c) <= 0x9FFF or 0xAC00 <= ord(c) <= 0xD7A3 for c in t.get("text", ""))
+            any(
+                0x4E00 <= ord(c) <= 0x9FFF
+                or 0xAC00 <= ord(c) <= 0xD7A3
+                or 0x3040 <= ord(c) <= 0x30FF
+                for c in t.get("text", "")
+            )
             for t in tokens
         )
 
-        if not is_foreign or not use_ruby:
+        single_tier_only = not pinyin_cfg["enabled"] and not en_cfg["enabled"]
+
+        if not is_foreign or not use_ruby or single_tier_only:
             lead_in = first_start - disp_start
             lead_tag = f"{{\\k{round(lead_in / 10)}}}" if lead_in > 20 else ""
             hz_parts = [lead_tag]

@@ -75,7 +75,7 @@ export async function saveProject(
 
 export async function updateProjectMeta(
   vid: string,
-  meta: { title?: string; artist?: string }
+  meta: { title?: string; artist?: string; tier_mode?: string }
 ): Promise<{ ok: boolean; metadata: any }> {
   const res = await fetch(`/api/project/${encodeURIComponent(vid)}/meta`, {
     method: 'POST',
@@ -101,10 +101,12 @@ export function subscribePipelineSSE(
     url: string;
     query?: string;
     target_lang?: string;
+    asr_engine?: string;
     lyrics_file?: string;
     skip_demucs?: boolean;
     skip_netease?: boolean;
     force_lrc?: boolean;
+    force_asr?: boolean;
     preview_only?: boolean;
   },
   onEvent: (data: any) => void,
@@ -114,10 +116,12 @@ export function subscribePipelineSSE(
   q.set('url', params.url);
   if (params.query) q.set('query', params.query);
   if (params.target_lang) q.set('target_lang', params.target_lang);
+  if (params.asr_engine) q.set('asr_engine', params.asr_engine);
   if (params.lyrics_file) q.set('lyrics_file', params.lyrics_file);
   if (params.skip_demucs) q.set('skip_demucs', '1');
   if (params.skip_netease) q.set('skip_netease', '1');
   if (params.force_lrc) q.set('force_lrc', '1');
+  if (params.force_asr) q.set('force_asr', '1');
   if (params.preview_only) q.set('preview_only', '1');
 
   const es = new EventSource(`/api/pipeline/run?${q.toString()}`);

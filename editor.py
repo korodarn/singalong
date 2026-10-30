@@ -144,10 +144,12 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
                 url_or_vid = query.get("url", [""])[0].strip()
                 custom_query = query.get("query", [""])[0].strip()
                 target_lang = query.get("target_lang", [""])[0].strip() or None
+                asr_engine = query.get("asr_engine", ["auto"])[0].strip() or "auto"
                 lyrics_file = query.get("lyrics_file", [""])[0].strip() or None
                 skip_demucs = query.get("skip_demucs", ["0"])[0] in ("1", "true")
                 skip_netease = query.get("skip_netease", ["0"])[0] in ("1", "true")
                 force_lrc = query.get("force_lrc", ["0"])[0] in ("1", "true")
+                force_asr = query.get("force_asr", ["0"])[0] in ("1", "true")
                 preview_only = query.get("preview_only", ["0"])[0] in ("1", "true")
                 self.serve_pipeline_sse(
                     url_or_vid,
@@ -158,6 +160,8 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
                     target_lang,
                     lyrics_file,
                     preview_only,
+                    asr_engine,
+                    force_asr,
                 )
             elif path.startswith("/api/project/"):
                 parts = path.strip("/").split("/")
@@ -378,6 +382,8 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
                 current["title"] = str(payload["title"]).strip()
             if "artist" in payload:
                 current["artist"] = str(payload["artist"]).strip()
+            if "tier_mode" in payload:
+                current["tier_mode"] = str(payload["tier_mode"]).strip()
             meta_path.write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
             self.send_json({"ok": True, "metadata": current})
         except Exception as e:
@@ -543,6 +549,8 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
         target_lang: str | None = None,
         lyrics_file: str | None = None,
         preview_only: bool = False,
+        asr_engine: str = "auto",
+        force_asr: bool = False,
     ):
         self.close_connection = True
         self.send_response(200)
@@ -569,6 +577,8 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
             cmd.extend(["--query", custom_query])
         if target_lang:
             cmd.extend(["--target-lang", target_lang])
+        if asr_engine and asr_engine != "auto":
+            cmd.extend(["--asr-engine", asr_engine])
         if lyrics_file:
             cmd.extend(["--lyrics-file", lyrics_file])
         if skip_demucs:
@@ -577,6 +587,8 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
             cmd.append("--skip-netease")
         if force_lrc:
             cmd.append("--force-lrc")
+        if force_asr:
+            cmd.append("--force-asr")
         if preview_only:
             cmd.append("--preview-only")
 

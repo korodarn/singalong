@@ -14,12 +14,16 @@ import soundfile as sf
 
 from core.phonetics import (
     add_phonetics,
+    apply_korean_phonology,
     decompose_hangul,
+    has_kana,
     is_hangul,
     is_han,
+    is_kana,
     tokenize_tokens,
     tokenize_text,
 )
+from core.phonetics.ja import SUNG_KANJI_OVERRIDES, _get_kakasi, respell_hira_to_romaji_and_en, split_morae
 
 
 class VocalAnalyzer:
@@ -194,9 +198,13 @@ SHORT_FUNC_WORDS = {
 
 
 def count_syllables(txt: str) -> int:
-    """Estimate spoken/sung syllable count for CJK characters or English words."""
+    """Estimate spoken/sung syllable count for CJK characters, Japanese morae, or English words."""
     if not txt:
         return 1
+    if has_kana(txt):
+        kks = _get_kakasi()
+        hira = "".join(it.get("hira", "") for it in kks.convert(txt))
+        return max(1, len(split_morae(hira)))
     if is_han(txt[0]) or is_hangul(txt[0]):
         return len(txt)
     w = txt.lower().strip("'")
@@ -216,15 +224,21 @@ def count_syllables(txt: str) -> int:
 
 def word_weight(c: dict, idx: int, m: int) -> float:
     txt = c["text"]
-    if is_hangul(txt):
+    if has_kana(txt):
+        ns = count_syllables(txt)
+        w = 0.45 + 0.55 * ns
+    elif len(txt) == 1 and is_hangul(txt):
         w = 1.0
         _, v_idx, f_idx = decompose_hangul(txt)
         if f_idx != 0:
             w += 0.18
         if v_idx in (2, 3, 6, 7, 9, 10, 11, 12, 14, 15, 16, 17, 19):
             w += 0.12
-    elif is_han(txt):
+    elif len(txt) == 1 and is_han(txt):
         w = 1.0 + (0.08 * ((ord(txt) % 3) - 1))
+    elif any(is_han(ch) for ch in txt):
+        # Multi-character Kanji compound in Japanese
+        w = 0.45 + 0.65 * len(txt)
     else:
         ns = count_syllables(txt)
         w = 0.35 + 0.65 * ns + 0.02 * min(len(txt), 8)
@@ -238,9 +252,21 @@ def word_weight(c: dict, idx: int, m: int) -> float:
     return max(0.4, w)
 
 
-def _token_phonetic_str(txt: str) -> str:
+def _token_phonetic_str(txt: str, is_ja: bool = False) -> str:
     if not txt:
         return ""
+    if is_ja or has_kana(txt):
+        if txt in SUNG_KANJI_OVERRIDES:
+            return re.sub(r"[^a-z0-9]", "", SUNG_KANJI_OVERRIDES[txt][0].lower())
+        kks = _get_kakasi()
+        hira = "".join(it.get("hira", "") for it in kks.convert(txt))
+        rom, _ = respell_hira_to_romaji_and_en(hira)
+        return re.sub(r"[^a-z0-9]", "", rom.lower())
+    if any(is_hangul(ch) for ch in txt):
+        ko_toks = [{"text": ch} for ch in txt if is_hangul(ch)]
+        if ko_toks:
+            apply_korean_phonology(ko_toks)
+            return re.sub(r"[^a-z0-9]", "", "".join(t.get("pinyin", "") for t in ko_toks).lower())
     if any(is_han(ch) for ch in txt):
         return "".join(lazy_pinyin(txt)).lower()
     return re.sub(r"[^a-z0-9]", "", txt.lower())
@@ -263,8 +289,9 @@ def _tokens_match_chars(chars: list[dict], toks: list[dict], min_ratio: float = 
     line_has_han = any(is_han(c["text"][0]) for c in chars if c.get("text"))
     if not line_has_han and any(is_han(t["text"][0]) for t in toks if t.get("text")):
         return False
-    c_py = "".join(_token_phonetic_str(c["text"]) for c in chars)
-    t_py = "".join(_token_phonetic_str(t["text"]) for t in toks)
+    is_ja = any(has_kana(c.get("text", "")) for c in chars) or any(has_kana(t.get("text", "")) for t in toks)
+    c_py = "".join(_token_phonetic_str(c["text"], is_ja=is_ja) for c in chars)
+    t_py = "".join(_token_phonetic_str(t["text"], is_ja=is_ja) for t in toks)
     if not c_py or not t_py:
         return False
     overall = fuzz.ratio(c_py, t_py)
@@ -275,8 +302,8 @@ def _tokens_match_chars(chars: list[dict], toks: list[dict], min_ratio: float = 
             return False
         pair_matches = 0
         for idx, (c, t) in enumerate(zip(chars, toks)):
-            cp = _token_phonetic_str(c["text"])
-            tp = _token_phonetic_str(t["text"])
+            cp = _token_phonetic_str(c["text"], is_ja=is_ja)
+            tp = _token_phonetic_str(t["text"], is_ja=is_ja)
             pr = fuzz.ratio(cp, tp) if (cp and tp) else 0.0
             if pr >= 55.0 or (len(cp) <= 2 and cp == tp):
                 pair_matches += 1
@@ -346,12 +373,13 @@ def align_words_in_island(sub_chars: list[dict], span_s: int, span_e: int,
 
     # Reinforce boundary curve where individual ASR tokens phonetically match lyric words
     if sub_toks:
+        is_ja = any(has_kana(c.get("text", "")) for c in sub_chars) or any(has_kana(t.get("text", "")) for t in sub_toks)
         for c in sub_chars[1:]:
-            cp = _token_phonetic_str(c["text"])
+            cp = _token_phonetic_str(c["text"], is_ja=is_ja)
             if not cp:
                 continue
             for t in sub_toks:
-                tp = _token_phonetic_str(t["text"])
+                tp = _token_phonetic_str(t["text"], is_ja=is_ja)
                 if tp and fuzz.ratio(cp, tp) >= 75.0:
                     f_idx = (t["start"] - span_s) // analyzer.frame_ms
                     if 1 <= f_idx < n_frames - 1:
@@ -661,11 +689,15 @@ def align_lrc_with_tokens(lrc_lines, tokens, analyzer: VocalAnalyzer | None = No
         windows.append(lrc_lines[i:j])
         i = j
 
+    is_ja_song = any(has_kana(it.get("text", "")) for it in lrc_lines) or any(
+        has_kana(t.get("text", "")) for t in valid_tokens
+    )
+
     anchors = []
     for w_idx, win in enumerate(windows):
         combined_text = " ".join(it["text"] for it in win)
-        c_chars = tokenize_text(combined_text)
-        c_py = "".join(_token_phonetic_str(ch) for ch in c_chars)
+        c_chars = tokenize_text(combined_text, lang="ja" if is_ja_song else None)
+        c_py = "".join(_token_phonetic_str(ch, is_ja=is_ja_song) for ch in c_chars)
         nom_s = win[0]["start"]
 
         compat_tokens = _filter_script_compatible_tokens(combined_text, valid_tokens)
@@ -676,7 +708,7 @@ def align_lrc_with_tokens(lrc_lines, tokens, analyzer: VocalAnalyzer | None = No
             for span_len in range(max(1, len(c_chars) - 2), min(len(cands) + 1, len(c_chars) + 3)):
                 for k in range(len(cands) - span_len + 1):
                     sub = cands[k:k + span_len]
-                    sub_py = "".join(_token_phonetic_str(t["text"]) for t in sub)
+                    sub_py = "".join(_token_phonetic_str(t["text"], is_ja=is_ja_song) for t in sub)
                     if not sub_py:
                         continue
                     r = fuzz.ratio(c_py, sub_py)
@@ -687,7 +719,11 @@ def align_lrc_with_tokens(lrc_lines, tokens, analyzer: VocalAnalyzer | None = No
         first_ok = (
             best_sub is not None
             and len(c_chars) > 0
-            and fuzz.ratio(_token_phonetic_str(c_chars[0]), _token_phonetic_str(best_sub[0]["text"])) >= 60.0
+            and fuzz.ratio(
+                _token_phonetic_str(c_chars[0], is_ja=is_ja_song),
+                _token_phonetic_str(best_sub[0]["text"], is_ja=is_ja_song),
+            )
+            >= 60.0
         )
         if best_sub and best_r >= 72.0 and first_ok:
             anchors.append({"start": best_sub[0]["start"], "end": best_sub[-1]["end"], "conf": True})
@@ -768,7 +804,8 @@ def align_lrc_with_tokens(lrc_lines, tokens, analyzer: VocalAnalyzer | None = No
 def align_plain_lyrics_with_tokens(plain_lines: list[str], tokens: list[dict], analyzer: VocalAnalyzer | None = None) -> list[dict]:
     """
     Align plain unsynchronized lyrics text lines against ASR tokens and vocal acoustic energy.
-    Matches lines sequentially across tokens using character/phonetic string similarity.
+    Matches lines sequentially across tokens using character and phonetic (Romaji/Pinyin/RR) similarity,
+    with acoustic vocal-island fallback when ASR tokens are missing or unmatched.
     """
     clean_lines = [ln.strip() for ln in plain_lines if ln.strip()]
     if not clean_lines:
@@ -776,28 +813,60 @@ def align_plain_lyrics_with_tokens(plain_lines: list[str], tokens: list[dict], a
     if analyzer is None:
         analyzer = VocalAnalyzer(None)
 
+    is_ja = any(has_kana(ln) for ln in clean_lines) or any(has_kana(t.get("text", "")) for t in tokens)
+    tok_pys = [_token_phonetic_str(t.get("text", ""), is_ja=is_ja) for t in tokens] if tokens else []
+
+    # Determine the earliest voiced singing onset in the audio so an unmatched first line
+    # starts at the actual vocal entry instead of jumping to a late ASR token.
+    first_vocal_ms = 1000
+    if analyzer.rms_db is not None and len(analyzer.rms_db) > 0:
+        total_ms = len(analyzer.rms_db) * analyzer.frame_ms
+        voiced_isl = analyzer.active_islands(0, total_ms, min_island_ms=250)
+        if voiced_isl:
+            first_vocal_ms = voiced_isl[0][0]
+    elif tokens:
+        first_vocal_ms = tokens[0]["start"]
+
     cur_tok_idx = 0
     anchors = []
     for line in clean_lines:
-        norm_chars = tokenize_text(line)
+        norm_chars = tokenize_text(line, lang="ja" if is_ja else None)
         m_chars = len(norm_chars)
         if m_chars == 0:
             continue
         line_str = "".join(norm_chars).lower()
+        line_py = "".join(_token_phonetic_str(c, is_ja=is_ja) for c in norm_chars)
 
-        best_r = -1
+        best_score = -1e9
+        best_r = -1.0
         best_span = (cur_tok_idx, cur_tok_idx)
-        window = tokens[cur_tok_idx : cur_tok_idx + 45] if tokens else []
+        win_limit = 55 if cur_tok_idx == 0 else 42
+        window = tokens[cur_tok_idx : cur_tok_idx + win_limit] if tokens else []
+        win_pys = tok_pys[cur_tok_idx : cur_tok_idx + win_limit] if tokens else []
+        prev_end = anchors[-1]["end"] if anchors else first_vocal_ms
+
         for span_len in range(max(1, m_chars - 3), min(len(window) + 1, m_chars + 6)):
             for k in range(len(window) - span_len + 1):
                 sub = window[k : k + span_len]
                 sub_str = "".join(t["text"] for t in sub).lower()
-                r = fuzz.ratio(line_str, sub_str)
-                if r > best_r:
+                sub_py = "".join(win_pys[k : k + span_len])
+                r_raw = fuzz.ratio(line_str, sub_str)
+                r_py = fuzz.ratio(line_py, sub_py) if (line_py and sub_py) else 0.0
+                r = max(r_raw, r_py * 0.96)
+
+                # Penalize skipping ASR tokens or jumping across large time gaps when tie-breaking
+                skip_pen = k * 0.65
+                if anchors:
+                    gap_s = max(0.0, (sub[0]["start"] - prev_end) / 1000.0)
+                    if gap_s > 6.0:
+                        skip_pen += (gap_s - 6.0) * 1.2
+                score = r - skip_pen
+                if score > best_score:
+                    best_score = score
                     best_r = r
                     best_span = (cur_tok_idx + k, cur_tok_idx + k + span_len)
 
-        if best_r >= 45 and tokens:
+        if best_r >= 48.0 and tokens:
             s_idx, e_idx = best_span
             anchors.append({
                 "text": line,
@@ -808,12 +877,20 @@ def align_plain_lyrics_with_tokens(plain_lines: list[str], tokens: list[dict], a
             })
             cur_tok_idx = e_idx
         else:
-            last_end = anchors[-1]["end"] if anchors else (tokens[0]["start"] if tokens else 1000)
-            est_dur = max(1200, m_chars * 260)
+            last_end = anchors[-1]["end"] if anchors else first_vocal_ms
+            total_syls = sum(count_syllables(c) for c in norm_chars)
+            est_dur = max(1200, total_syls * 240)
+            cand_s = last_end + (220 if anchors else 0)
+            # Snap to next voiced island if available nearby
+            if analyzer.rms_db is not None and len(analyzer.rms_db) > 0:
+                total_ms = len(analyzer.rms_db) * analyzer.frame_ms
+                isl = analyzer.active_islands(cand_s, min(total_ms, cand_s + 8000), min_island_ms=160)
+                if isl:
+                    cand_s = isl[0][0]
             anchors.append({
                 "text": line,
-                "start": last_end + 300,
-                "end": last_end + 300 + est_dur,
+                "start": cand_s,
+                "end": cand_s + est_dur,
                 "tokens": [],
                 "conf": False,
             })
@@ -821,6 +898,8 @@ def align_plain_lyrics_with_tokens(plain_lines: list[str], tokens: list[dict], a
     out_lines = []
     for idx, anc in enumerate(anchors):
         next_s = anchors[idx + 1]["start"] if idx + 1 < len(anchors) else anc["end"] + 1500
+        if next_s <= anc["start"] + 200:
+            next_s = max(anc["end"], anc["start"] + 1200)
         tok_list = align_line_with_clauses(anc["text"], anc["tokens"], anc["start"], next_s, analyzer)
         if tok_list:
             out_lines.append({

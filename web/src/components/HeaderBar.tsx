@@ -88,6 +88,17 @@ export const HeaderBar: Component<{ onSelectAndSeekLine?: (idx: number) => void 
     return `Mixed (${Math.round((lat / tot) * 100)}% Latin, ${Math.round((han / tot) * 100)}% CJK)`;
   };
 
+  const handleTierChange = async (mode: '3' | '2' | '1') => {
+    store.setTierMode(mode);
+    const vid = store.currentVid();
+    if (!vid) return;
+    try {
+      await updateProjectMeta(vid, { tier_mode: mode });
+    } catch (e) {
+      // ignore
+    }
+  };
+
   const handleEditTitle = async () => {
     const vid = store.currentVid();
     if (!vid) return;
@@ -246,6 +257,29 @@ export const HeaderBar: Component<{ onSelectAndSeekLine?: (idx: number) => void 
             <Show when={scriptDistribution()}>
               <span class="meta-stat-script">🌐 {scriptDistribution()}</span>
             </Show>
+            <div class="btn-group" title="Select subtitle display tiers for Stage & Render">
+              <button
+                class={`btn-toggle ${store.tierMode() === '3' ? 'active' : ''}`}
+                style={{ padding: '2px 7px', 'font-size': '11px' }}
+                onClick={() => handleTierChange('3')}
+              >
+                3-Tier
+              </button>
+              <button
+                class={`btn-toggle ${store.tierMode() === '2' ? 'active' : ''}`}
+                style={{ padding: '2px 7px', 'font-size': '11px' }}
+                onClick={() => handleTierChange('2')}
+              >
+                2-Tier
+              </button>
+              <button
+                class={`btn-toggle ${store.tierMode() === '1' ? 'active' : ''}`}
+                style={{ padding: '2px 7px', 'font-size': '11px' }}
+                onClick={() => handleTierChange('1')}
+              >
+                1-Tier
+              </button>
+            </div>
             <button class="btn-meta-edit" onClick={handleEditTitle} title="Rename song title / artist">
               ✏️ Edit Title
             </button>

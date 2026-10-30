@@ -42,6 +42,7 @@ function createAppStore() {
   const [isPlaying, setIsPlaying] = createSignal<boolean>(false);
   const [followPlayhead, setFollowPlayhead] = createSignal<boolean>(true);
   const [stemMode, setStemMode] = createSignal<'vocals' | 'mix'>('vocals');
+  const [tierMode, setTierMode] = createSignal<'3' | '2' | '1'>('3');
   const [playbackRate, setPlaybackRate] = createSignal<number>(1.0);
   const [waveformZoom, setWaveformZoom] = createSignal<number>(70);
 
@@ -186,6 +187,10 @@ function createAppStore() {
       setActiveLineIdx(0);
       clearTokenSelection();
       setStemMode(data.has_vocals ? 'vocals' : 'mix');
+      const savedTier = data.metadata?.tier_mode;
+      if (savedTier === '1' || savedTier === 'single_tier') setTierMode('1');
+      else if (savedTier === '2' || savedTier === 'two_tier') setTierMode('2');
+      else setTierMode('3');
       setStatusMsg(`Loaded ${vid}`);
       window.history.replaceState(null, '', `?vid=${encodeURIComponent(vid)}`);
     } catch (e: any) {
@@ -601,6 +606,8 @@ function createAppStore() {
     setFollowPlayhead,
     stemMode,
     setStemMode,
+    tierMode,
+    setTierMode,
     playbackRate,
     setPlaybackRate,
     waveformZoom,

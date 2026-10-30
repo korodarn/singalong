@@ -33,6 +33,7 @@ def main():
     parser.add_argument("--video", type=Path, default=None, help="Path to optional background video to layer text onto")
     parser.add_argument("--preview", type=float, default=None, help="Render only the first N seconds for a quick test")
     parser.add_argument("--ass-only", action="store_true", help="Generate only the .ass subtitle file and exit")
+    parser.add_argument("--tiers", default=None, help="Display tier mode: 1 (Native only), 2 (Romaji/Pinyin + Native), 3 (Full 3-tier)")
     args = parser.parse_args()
 
     if not args.json_file.exists():
@@ -43,6 +44,15 @@ def main():
 
     stem = args.json_file.stem
     workdir = args.json_file.parent
+
+    meta_tier_mode = args.tiers
+    meta_path = workdir / f"{stem}.meta.json"
+    if meta_tier_mode is None and meta_path.exists():
+        try:
+            meta_data = json.loads(meta_path.read_text(encoding="utf-8"))
+            meta_tier_mode = meta_data.get("tier_mode")
+        except Exception:
+            pass
 
     audio_path = args.audio
     if audio_path is None:
@@ -56,7 +66,7 @@ def main():
 
     ass_path = workdir / f"{stem}.ass"
     print(f"[*] Generating karaoke ASS subtitle: {ass_path}")
-    generate_ass(lines, cfg, ass_path)
+    generate_ass(lines, cfg, ass_path, tier_mode=meta_tier_mode)
 
     if args.ass_only:
         print("[+] ASS file generated successfully. Skipping video render (--ass-only).")

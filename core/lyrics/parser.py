@@ -99,14 +99,14 @@ def clean_lyrics_text(raw_text: str) -> str:
 
 def compute_text_similarity(text_a: str, text_b: str) -> float:
     """
-    Compute character/word + phonetic (pinyin) Jaccard similarity between two texts.
+    Compute character/word + phonetic (pinyin/romaji) Jaccard similarity between two texts.
     Strips LRC timestamps and studio credits before comparison.
     """
     clean_a = clean_lyrics_text(text_a) if "[" in text_a or ":" in text_a or "：" in text_a else text_a
     clean_b = clean_lyrics_text(text_b) if "[" in text_b or ":" in text_b or "：" in text_b else text_b
 
-    chars_a = re.findall(r"[\u4e00-\u9fff]|[\uac00-\ud7af]|[A-Za-z0-9']+", clean_a.lower())
-    chars_b = re.findall(r"[\u4e00-\u9fff]|[\uac00-\ud7af]|[A-Za-z0-9']+", clean_b.lower())
+    chars_a = re.findall(r"[\u3040-\u309f\u30a0-\u30ff]|[\u4e00-\u9fff]|[\uac00-\ud7af]|[A-Za-z0-9']+", clean_a.lower())
+    chars_b = re.findall(r"[\u3040-\u309f\u30a0-\u30ff]|[\u4e00-\u9fff]|[\uac00-\ud7af]|[A-Za-z0-9']+", clean_b.lower())
     if not chars_a or not chars_b:
         return 0.0
 

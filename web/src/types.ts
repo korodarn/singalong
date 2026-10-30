@@ -122,6 +122,7 @@ export interface ProjectData {
     title: string;
     artist: string;
     duration?: number;
+    tier_mode?: string;
   };
   lines: Line[];
   config: ProjectConfig;

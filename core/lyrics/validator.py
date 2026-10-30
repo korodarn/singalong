@@ -117,8 +117,8 @@ def detect_script_distribution(text: str) -> ScriptDistribution:
 def _titles_match(query_title: str | None, cand_title: str | None) -> bool:
     if not query_title or not cand_title:
         return False
-    q_clean = re.sub(r"[^a-z0-9\u4e00-\u9fff\uac00-\ud7af]", "", clean_search_query(query_title).lower())
-    c_clean = re.sub(r"[^a-z0-9\u4e00-\u9fff\uac00-\ud7af]", "", clean_search_query(cand_title).lower())
+    q_clean = re.sub(r"[^a-z0-9\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff\uac00-\ud7af]", "", clean_search_query(query_title).lower())
+    c_clean = re.sub(r"[^a-z0-9\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff\uac00-\ud7af]", "", clean_search_query(cand_title).lower())
     if not q_clean or not c_clean:
         return False
     return (q_clean in c_clean) or (c_clean in q_clean)

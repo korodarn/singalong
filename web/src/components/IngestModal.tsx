@@ -8,6 +8,7 @@ export const IngestModal: Component = () => {
   const [lastResetUrl, setLastResetUrl] = createSignal('');
   const [customQuery, setCustomQuery] = createSignal('');
   const [targetLang, setTargetLang] = createSignal('auto');
+  const [asrEngine, setAsrEngine] = createSignal('auto');
 
   // 2-Step Workflow stage: 'step1' (Audio + Discovery) -> 'step2' (Lyrics Preview & Confirm Alignment)
   const [stage, setStage] = createSignal<'step1' | 'step2'>('step1');
@@ -24,6 +25,7 @@ export const IngestModal: Component = () => {
   // Pipeline options & state
   const [skipDemucs, setSkipDemucs] = createSignal(false);
   const [forceLrc, setForceLrc] = createSignal(false);
+  const [forceAsr, setForceAsr] = createSignal(false);
   const [pureAsrOnly, setPureAsrOnly] = createSignal(false);
   const [isRunning, setIsRunning] = createSignal(false);
   const [activeStep, setActiveStep] = createSignal(0);
@@ -140,9 +142,11 @@ export const IngestModal: Component = () => {
         url: targetUrl,
         query: customQuery().trim() || undefined,
         target_lang: targetLang() !== 'auto' ? targetLang() : undefined,
+        asr_engine: asrEngine(),
         skip_demucs: skipDemucs(),
         skip_netease: pureAsrOnly(),
         force_lrc: forceLrc(),
+        force_asr: forceAsr(),
         preview_only: true,
       },
       async (data) => {
@@ -211,10 +215,12 @@ export const IngestModal: Component = () => {
         url: targetUrl,
         query: customQuery().trim() || undefined,
         target_lang: targetLang() !== 'auto' ? targetLang() : undefined,
+        asr_engine: asrEngine(),
         lyrics_file: lyricsFile,
         skip_demucs: skipDemucs(),
         skip_netease: pureAsrOnly() || Boolean(lyricsFile),
         force_lrc: false,
+        force_asr: false,
         preview_only: false,
       },
       async (data) => {
@@ -273,8 +279,8 @@ export const IngestModal: Component = () => {
           </div>
 
           <div class="modal-body">
-            {/* Top Bar: Video ID & Target Language */}
-            <div style={{ display: 'grid', 'grid-template-columns': '2fr 1fr', gap: '10px' }}>
+            {/* Top Bar: Video ID, Target Language & ASR Engine */}
+            <div style={{ display: 'grid', 'grid-template-columns': '2fr 1fr 1fr', gap: '10px' }}>
               <label class="form-label">
                 YouTube Video Code (11-char ID) or URL:
                 <input
@@ -293,11 +299,25 @@ export const IngestModal: Component = () => {
                   onChange={(e) => setTargetLang(e.currentTarget.value)}
                   disabled={isRunning()}
                 >
-                  <option value="auto">Auto-Detect (ASR + Script Check)</option>
+                  <option value="auto">Auto-Detect (ASR + Script)</option>
                   <option value="zh">Mandarin (Hanzi / Pinyin)</option>
                   <option value="en">English (Pure Latin)</option>
                   <option value="ja">Japanese (Kana / Romaji)</option>
                   <option value="ko">Korean (Hangul / Romaja)</option>
+                </select>
+              </label>
+              <label class="form-label">
+                ASR Engine:
+                <select
+                  class="form-input"
+                  value={asrEngine()}
+                  onChange={(e) => setAsrEngine(e.currentTarget.value)}
+                  disabled={isRunning()}
+                >
+                  <option value="auto">Auto (Smart Routing)</option>
+                  <option value="paraformer">FunASR Paraformer (ZH)</option>
+                  <option value="whisper">Faster-Whisper (EN/JA/KO)</option>
+                  <option value="sensevoice">SenseVoiceSmall (Fast)</option>
                 </select>
               </label>
             </div>
@@ -366,7 +386,16 @@ export const IngestModal: Component = () => {
                     onChange={(e) => setForceLrc(e.currentTarget.checked)}
                     disabled={isRunning()}
                   />
-                  Force Re-fetch External Lyrics (Ignore cached .netease.lrc)
+                  Force Re-fetch Lyrics
+                </label>
+                <label class="form-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={forceAsr()}
+                    onChange={(e) => setForceAsr(e.currentTarget.checked)}
+                    disabled={isRunning()}
+                  />
+                  Force Re-run ASR
                 </label>
                 <label class="form-checkbox">
                   <input

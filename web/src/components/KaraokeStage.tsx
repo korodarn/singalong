@@ -186,10 +186,12 @@ export const KaraokeStage: Component<{
                             </button>
                           </div>
 
-                          <Show when={hasCjk()}>
+                          <Show when={hasCjk() && store.tierMode() === '3'}>
                             <span class="tier-en" style={{ '--wipe-pct': `${pct()}%` }}>
                               {tok.en || tok.text}
                             </span>
+                          </Show>
+                          <Show when={hasCjk() && (store.tierMode() === '3' || store.tierMode() === '2')}>
                             <span class="tier-py" style={{ '--wipe-pct': `${pct()}%` }}>
                               {tok.pinyin || tok.text}
                             </span>
