@@ -31,6 +31,7 @@ if VENV_PYTHON.exists() and Path(sys.executable).resolve() != VENV_PYTHON.resolv
             os.execv(str(VENV_PYTHON), args)
 
 from core.linter import lint_project
+from core.media import download_bg_media, detect_media_type, resolve_local_bg_file
 from core.phonetics import load_custom_dict, save_custom_dict
 from core.lyrics import (
     search_all_lyrics,
@@ -192,6 +193,8 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
                     self.serve_video_file(vid)
                 else:
                     self.send_error(400, "Missing video id")
+            elif path.startswith("/api/bg-media/"):
+                self.serve_bg_media_file(path, query)
             elif path == "/api/dict":
                 self.send_json(load_custom_dict())
             else:
@@ -214,8 +217,15 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
                 self.handle_meta_update(vid)
             else:
                 self.send_error(404, "Endpoint not found")
+        elif path == "/api/bg-media/download":
+            self.handle_bg_media_download()
+        elif path == "/api/bg-media/local":
+            self.handle_bg_media_local()
+        elif path == "/api/bg-media/upload":
+            self.handle_bg_media_upload()
         elif path == "/api/dict":
             self.handle_dict_update()
+
         elif path == "/api/lyrics/search":
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length)
@@ -352,6 +362,19 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+        cand_bg = metadata.get("bg_media_path") or metadata.get("bg_video_path")
+        if cand_bg:
+            bg_p = Path(cand_bg)
+            if not bg_p.is_absolute():
+                bg_p = self.server.workdir / bg_p if (self.server.workdir / bg_p).exists() else bg_p.resolve()
+            if bg_p.exists() and bg_p.is_file():
+                metadata["bg_media_exists"] = True
+                metadata["bg_media_path"] = str(bg_p)
+                metadata["bg_media_type"] = metadata.get("bg_media_type") or detect_media_type(bg_p)
+                metadata["bg_stream_url"] = f"/api/bg-media/stream?path={bg_p.name}"
+            else:
+                metadata["bg_media_exists"] = False
+
         response = {
             "exists": True,
             "video_id": vid,
@@ -384,10 +407,52 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
                 current["artist"] = str(payload["artist"]).strip()
             if "tier_mode" in payload:
                 current["tier_mode"] = str(payload["tier_mode"]).strip()
+            if "bg_media_path" in payload:
+                val = payload["bg_media_path"]
+                current["bg_media_path"] = str(val).strip() if val else None
+            if "bg_media_type" in payload:
+                val = payload["bg_media_type"]
+                current["bg_media_type"] = str(val).strip() if val else None
+            if "bg_video_id" in payload:
+                val = payload["bg_video_id"]
+                current["bg_video_id"] = str(val).strip() if val else None
+            if "bg_video_path" in payload:
+                val = payload["bg_video_path"]
+                current["bg_video_path"] = str(val).strip() if val else None
+            if "bg_offset_ms" in payload:
+                try:
+                    current["bg_offset_ms"] = int(payload["bg_offset_ms"])
+                except (ValueError, TypeError):
+                    current["bg_offset_ms"] = 0
+            if "bg_dim_pct" in payload:
+                try:
+                    current["bg_dim_pct"] = int(payload["bg_dim_pct"])
+                except (ValueError, TypeError):
+                    current["bg_dim_pct"] = 35
+
             meta_path.write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
+
+            cand_bg = current.get("bg_media_path") or current.get("bg_video_path")
+            if cand_bg:
+                bg_p = Path(cand_bg)
+                if not bg_p.is_absolute():
+                    bg_p = self.server.workdir / bg_p if (self.server.workdir / bg_p).exists() else bg_p.resolve()
+                if bg_p.exists() and bg_p.is_file():
+                    current["bg_media_exists"] = True
+                    current["bg_media_path"] = str(bg_p)
+                    current["bg_media_type"] = current.get("bg_media_type") or detect_media_type(bg_p)
+                    current["bg_stream_url"] = f"/api/bg-media/stream?path={bg_p.name}"
+                else:
+                    current["bg_media_exists"] = False
+                    current["bg_stream_url"] = None
+            else:
+                current["bg_media_exists"] = False
+                current["bg_stream_url"] = None
+
             self.send_json({"ok": True, "metadata": current})
         except Exception as e:
             self.send_json({"ok": False, "error": str(e)}, status=400)
+
 
     def handle_project_save(self, vid: str):
         json_path = self.server.workdir / f"{vid}.json"
@@ -481,6 +546,190 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
             return
 
         self.stream_file_with_range(cand, mime)
+
+    def serve_bg_media_file(self, req_path: str, query: dict):
+        cand_name = query.get("path", [""])[0].strip()
+        if not cand_name:
+            parts = req_path.strip("/").split("/")
+            if len(parts) >= 3 and parts[2] != "stream":
+                cand_name = parts[2]
+            elif len(parts) >= 4:
+                cand_name = parts[3]
+
+        if not cand_name:
+            self.send_error(400, "Missing media path or filename")
+            return
+
+        cand = Path(cand_name)
+        if not cand.is_absolute():
+            bg_dir = self.server.workdir / "bg"
+            if (bg_dir / cand.name).exists():
+                cand = bg_dir / cand.name
+            elif (self.server.workdir / cand).exists():
+                cand = self.server.workdir / cand
+            else:
+                matches = list(bg_dir.glob(f"{cand.stem}.*"))
+                if matches and matches[0].exists():
+                    cand = matches[0]
+
+        if not cand.exists() or not cand.is_file():
+            self.send_error(404, f"Background media file not found: {cand_name}")
+            return
+
+        m_type = detect_media_type(cand)
+        mime, _ = mimetypes.guess_type(str(cand))
+        if not mime:
+            mime = "image/jpeg" if m_type == "image" else "video/mp4"
+
+        if m_type == "video":
+            self.stream_file_with_range(cand, mime)
+        else:
+            try:
+                data = cand.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", mime)
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(data)
+            except (ConnectionResetError, BrokenPipeError):
+                pass
+
+    def handle_bg_media_download(self):
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length)
+        try:
+            payload = json.loads(body.decode("utf-8"))
+            url = payload.get("url", "").strip()
+            vid = payload.get("project", "").strip()
+            if not url:
+                self.send_json({"ok": False, "error": "Missing URL"}, status=400)
+                return
+
+            bg_id, bg_path, m_type = download_bg_media(url, self.server.workdir)
+            stream_url = f"/api/bg-media/stream?path={bg_path.name}"
+
+            if vid:
+                meta_path = self.server.workdir / f"{vid}.meta.json"
+                current = {"video_id": vid, "title": vid, "artist": "", "duration": 0}
+                if meta_path.exists():
+                    try:
+                        current.update(json.loads(meta_path.read_text(encoding="utf-8")))
+                    except Exception:
+                        pass
+                current["bg_media_path"] = str(bg_path)
+                current["bg_media_type"] = m_type
+                if m_type == "video":
+                    current["bg_video_id"] = bg_id
+                    current["bg_video_path"] = str(bg_path)
+                meta_path.write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
+
+            self.send_json({
+                "ok": True,
+                "bg_id": bg_id,
+                "bg_path": str(bg_path),
+                "media_type": m_type,
+                "stream_url": stream_url,
+            })
+        except Exception as e:
+            self.send_json({"ok": False, "error": str(e)}, status=500)
+
+    def handle_bg_media_local(self):
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length)
+        try:
+            payload = json.loads(body.decode("utf-8"))
+            path_str = payload.get("path", "").strip()
+            vid = payload.get("project", "").strip()
+            if not path_str:
+                self.send_json({"ok": False, "error": "Missing path"}, status=400)
+                return
+
+            bg_id, bg_path, m_type = resolve_local_bg_file(path_str, self.server.workdir)
+            stream_url = f"/api/bg-media/stream?path={bg_path.name}"
+
+            if vid:
+                meta_path = self.server.workdir / f"{vid}.meta.json"
+                current = {"video_id": vid, "title": vid, "artist": "", "duration": 0}
+                if meta_path.exists():
+                    try:
+                        current.update(json.loads(meta_path.read_text(encoding="utf-8")))
+                    except Exception:
+                        pass
+                current["bg_media_path"] = str(bg_path)
+                current["bg_media_type"] = m_type
+                if m_type == "video":
+                    current["bg_video_id"] = bg_id
+                    current["bg_video_path"] = str(bg_path)
+                meta_path.write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
+
+            self.send_json({
+                "ok": True,
+                "bg_id": bg_id,
+                "bg_path": str(bg_path),
+                "media_type": m_type,
+                "stream_url": stream_url,
+            })
+        except Exception as e:
+            self.send_json({"ok": False, "error": str(e)}, status=500)
+
+    def handle_bg_media_upload(self):
+        query = parse_qs(urlparse(self.path).query)
+        filename = query.get("filename", [""])[0] or self.headers.get("X-Filename", "") or "uploaded_media"
+        vid = query.get("project", [""])[0]
+
+        clean_name = re.sub(r"[^A-Za-z0-9_.-]", "_", Path(filename).name)
+        if not clean_name:
+            clean_name = "upload.mp4"
+
+        content_length = int(self.headers.get("Content-Length", 0))
+        if content_length <= 0:
+            self.send_json({"ok": False, "error": "Empty upload"}, status=400)
+            return
+
+        bg_dir = self.server.workdir / "bg"
+        bg_dir.mkdir(parents=True, exist_ok=True)
+        out_path = bg_dir / clean_name
+
+        try:
+            with open(out_path, "wb") as f:
+                bytes_left = content_length
+                while bytes_left > 0:
+                    chunk = self.rfile.read(min(65536, bytes_left))
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    bytes_left -= len(chunk)
+
+            m_type = detect_media_type(out_path)
+            stream_url = f"/api/bg-media/stream?path={out_path.name}"
+
+            if vid:
+                meta_path = self.server.workdir / f"{vid}.meta.json"
+                current = {"video_id": vid, "title": vid, "artist": "", "duration": 0}
+                if meta_path.exists():
+                    try:
+                        current.update(json.loads(meta_path.read_text(encoding="utf-8")))
+                    except Exception:
+                        pass
+                current["bg_media_path"] = str(out_path)
+                current["bg_media_type"] = m_type
+                if m_type == "video":
+                    current["bg_video_id"] = out_path.stem
+                    current["bg_video_path"] = str(out_path)
+                meta_path.write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
+
+            self.send_json({
+                "ok": True,
+                "bg_id": out_path.stem,
+                "bg_path": str(out_path),
+                "media_type": m_type,
+                "stream_url": stream_url,
+            })
+        except Exception as e:
+            self.send_json({"ok": False, "error": str(e)}, status=500)
+
 
     def stream_file_with_range(self, file_path: Path, content_type: str):
         try:

@@ -1179,3 +1179,254 @@ button.btn-danger:hover:not(:disabled) { background: var(--accent-danger); color
   font-weight: 600;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
+
+/* Background Media Layer in Stage */
+.stage-bg-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.stage-bg-media {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  display: block;
+}
+
+.stage-bg-dimmer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+
+.stage-top-meta {
+  z-index: 10;
+}
+
+.stage-viewport {
+  position: relative;
+  z-index: 2;
+}
+
+.stage-bg-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border-bright);
+  color: var(--text-white);
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.12s;
+}
+.stage-bg-btn:hover {
+  background: var(--border-bright);
+  border-color: var(--accent-primary);
+}
+.stage-bg-btn.active {
+  background: rgba(56, 189, 248, 0.15);
+  border-color: rgba(56, 189, 248, 0.4);
+  color: #38bdf8;
+  font-weight: 600;
+}
+
+/* Background Media Modal */
+.bg-empty-banner {
+  background: var(--bg-darker);
+  border: 1px dashed var(--border-subtle);
+  border-radius: 6px;
+  padding: 12px 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.bg-active-card {
+  background: var(--bg-darker);
+  border: 1px solid var(--border-bright);
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.bg-active-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.bg-active-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.badge-media {
+  font-size: 10px;
+  font-weight: 800;
+  padding: 3px 7px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+}
+.badge-media.video {
+  background: rgba(56, 189, 248, 0.2);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+}
+.badge-media.image {
+  background: rgba(168, 85, 247, 0.2);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.4);
+}
+
+.bg-file-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-white);
+  max-width: 380px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bg-preview-row {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 14px;
+  align-items: center;
+}
+
+.bg-mini-preview {
+  height: 135px;
+  background: #000;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bg-preview-media {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.bg-adjust-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.nudge-btn-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.form-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+
+.bg-source-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tab-header {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 8px;
+}
+
+.tab-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tab-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.input-with-button {
+  display: flex;
+  gap: 8px;
+}
+
+.input-with-button .form-input {
+  flex: 1;
+}
+
+.upload-dropzone {
+  border: 2px dashed var(--border-bright);
+  border-radius: 8px;
+  padding: 24px 16px;
+  text-align: center;
+  background: var(--bg-darker);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.upload-dropzone:hover, .upload-dropzone.drag-over {
+  border-color: var(--accent-primary);
+  background: rgba(99, 102, 241, 0.08);
+}
+
+.dropzone-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.dropzone-icon {
+  font-size: 32px;
+}
+
+.dropzone-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-white);
+}
+
+.dropzone-subtitle {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.text-accent {
+  color: var(--accent-lead);
+}
+
+.error-banner {
+  background: rgba(255, 92, 119, 0.15);
+  border: 1px solid var(--accent-danger);
+  color: var(--accent-danger);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+

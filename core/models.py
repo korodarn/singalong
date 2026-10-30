@@ -37,8 +37,11 @@ class ProjectSummary:
 class ProjectMeta:
     bg_video_id: Optional[str] = None
     bg_video_path: Optional[str] = None
+    bg_media_path: Optional[str] = None
+    bg_media_type: Optional[str] = None  # "video" | "image"
     bg_offset_ms: int = 0
     bg_dim_pct: int = 35
     tier_mode: str = "multi_tier"
     asr_engine: str = "auto"
     target_lang: str = "auto"
+

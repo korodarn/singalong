@@ -58,6 +58,25 @@ export const RenderModal: Component = () => {
           </div>
           <div class="modal-body">
             <div class="render-options">
+              <div class="render-bg-info" style={{ display: 'flex', 'align-items': 'center', gap: '8px', padding: '8px 12px', background: 'var(--bg-card)', 'border-radius': '6px', 'font-size': '12px', border: '1px solid var(--border)' }}>
+                <span>🎬 Background: </span>
+                <span class="font-mono" style={{ color: 'var(--accent-lead)' }}>
+                  {store.projectData()?.metadata?.bg_media_path
+                    ? `${store.projectData()?.metadata?.bg_media_type === 'image' ? '🖼️ Static Image' : '🎥 Video'}: ${store.projectData()?.metadata?.bg_media_path?.split('/').pop()} (Dim ${store.projectData()?.metadata?.bg_dim_pct ?? 35}%)`
+                    : 'Synthetic Black'}
+                </span>
+                <button
+                  class="btn btn-sm"
+                  style={{ 'margin-left': 'auto', padding: '2px 8px', 'font-size': '11px' }}
+                  onClick={() => {
+                    store.setShowRenderModal(false);
+                    store.setShowVideoBgModal(true);
+                  }}
+                >
+                  Configure BG...
+                </button>
+              </div>
+
               <label class="form-label">
                 Render Duration:
                 <select
@@ -85,6 +104,7 @@ export const RenderModal: Component = () => {
                 Generate .ass Subtitles only (Skip FFmpeg video encode)
               </label>
             </div>
+
 
             <Show when={videoUrl()}>
               <div class="rendered-video-preview">

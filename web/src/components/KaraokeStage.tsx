@@ -1,4 +1,4 @@
-import { Component, For, Show, createSignal, onMount } from 'solid-js';
+import { Component, For, Show, createEffect, createSignal, onMount } from 'solid-js';
 import { store, fmtMs } from '../state/store';
 import { Token } from '../types';
 
@@ -6,12 +6,42 @@ export const KaraokeStage: Component<{
   onPlayBounds: (startMs: number, endMs?: number) => void;
 }> = (props) => {
   const [stageHeight, setStageHeight] = createSignal<number>(195);
+  let bgVideoRef: HTMLVideoElement | undefined;
+
+  const meta = () => store.projectData()?.metadata;
+  const hasBgMedia = () => Boolean(meta()?.bg_media_path || meta()?.bg_video_path);
+  const bgStreamUrl = () => meta()?.bg_stream_url || (meta()?.bg_media_path ? `/api/bg-media/stream?path=${encodeURIComponent(meta()?.bg_media_path!.split('/').pop() || '')}` : '');
+  const bgMediaType = () => meta()?.bg_media_type || (meta()?.bg_media_path?.match(/\.(jpe?g|png|webp|bmp)$/i) ? 'image' : 'video');
+  const bgOffsetMs = () => meta()?.bg_offset_ms || 0;
+  const bgDimPct = () => meta()?.bg_dim_pct ?? 35;
 
   onMount(() => {
     const saved = localStorage.getItem('singalong_preview_height');
     if (saved) {
       const h = parseInt(saved, 10);
       if (!isNaN(h) && h >= 100 && h <= 500) setStageHeight(h);
+    }
+  });
+
+  createEffect(() => {
+    if (!bgVideoRef || bgMediaType() !== 'video') return;
+    const playing = store.isPlaying();
+    const rate = store.playbackRate();
+    bgVideoRef.playbackRate = rate;
+    if (playing) {
+      bgVideoRef.play().catch(() => {});
+    } else {
+      bgVideoRef.pause();
+    }
+  });
+
+  createEffect(() => {
+    if (!bgVideoRef || bgMediaType() !== 'video') return;
+    const audioTimeMs = store.currentTimeMs();
+    const offset = bgOffsetMs();
+    const targetSec = Math.max(0, (audioTimeMs + offset) / 1000.0);
+    if (Math.abs(bgVideoRef.currentTime - targetSec) > 0.25) {
+      bgVideoRef.currentTime = targetSec;
     }
   });
 
@@ -70,6 +100,35 @@ export const KaraokeStage: Component<{
   return (
     <>
       <section class="preview-stage" style={{ height: `${stageHeight()}px` }}>
+        {/* Synchronized Background Video or Static Image Layer */}
+        <Show when={hasBgMedia() && bgStreamUrl()}>
+          <div class="stage-bg-container">
+            <Show
+              when={bgMediaType() === 'video'}
+              fallback={
+                <img
+                  src={bgStreamUrl()}
+                  alt="Background"
+                  class="stage-bg-media"
+                />
+              }
+            >
+              <video
+                ref={bgVideoRef}
+                src={bgStreamUrl()}
+                muted
+                playsinline
+                loop
+                class="stage-bg-media"
+              />
+            </Show>
+            <div
+              class="stage-bg-dimmer"
+              style={{ 'background-color': `rgba(0, 0, 0, ${(bgDimPct() / 100).toFixed(2)})` }}
+            />
+          </div>
+        </Show>
+
         <div class="stage-top-meta">
           <Show when={currentLine()}>
             {(line) => (
@@ -82,9 +141,19 @@ export const KaraokeStage: Component<{
                 >
                   {line().is_backing ? '👥 BACKING VOCALS (CYAN)' : '🎤 LEAD VOCALS (GOLD)'}
                 </span>
+
                 <span class="meta-tag">
                   Line #{store.activeLineIdx() + 1} / {store.lines().length} • {fmtMs(line().start)} → {fmtMs(line().end)}
                 </span>
+                <button
+                  class={`stage-bg-btn ${hasBgMedia() ? 'active' : ''}`}
+                  onClick={() => store.setShowVideoBgModal(true)}
+                  title="Set or adjust background video or image overlay"
+                >
+                  {hasBgMedia()
+                    ? `🎬 BG: ${bgMediaType() === 'image' ? '🖼️ Image' : '🎥 Video'} (${bgDimPct()}%)`
+                    : '🎬 Set Background'}
+                </button>
                 <span class="stage-hint">
                   Click: Select/Play • Shift+Click: Range • Alt+Click: Delete • [C]: Comment • Double-Click: Phonetics
                 </span>
@@ -92,6 +161,7 @@ export const KaraokeStage: Component<{
             )}
           </Show>
         </div>
+
 
         <div class="stage-viewport">
           <Show when={currentLine()} fallback={<div class="stage-placeholder">No line selected or project empty</div>}>

@@ -218,11 +218,20 @@ export const HeaderBar: Component<{ onSelectAndSeekLine?: (idx: number) => void 
         <div class="header-right">
           <button
             class="btn"
+            onClick={() => store.setShowVideoBgModal(true)}
+            title="Set or adjust background video or image overlay"
+          >
+            🎬 Background
+          </button>
+
+          <button
+            class="btn"
             onClick={openRealignCurrent}
             title="Re-run singalong.py alignment or change lyrics query/drop-in"
           >
             🔄 Re-Align
           </button>
+
 
           <button class="btn" onClick={() => store.undo()} title="Undo last edit (Ctrl+Z)">
             ↩ Undo

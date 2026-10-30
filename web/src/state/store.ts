@@ -1,6 +1,6 @@
 import { createSignal, createRoot } from 'solid-js';
-import { ProjectData, ProjectSummary, Line, Token } from '../types';
-import { fetchProjects, fetchProject, saveProject } from '../api';
+import { ProjectData, ProjectMetadata, ProjectSummary, Line, Token } from '../types';
+import { fetchProjects, fetchProject, saveProject, updateProjectMeta } from '../api';
 
 export interface ToastItem {
   id: number;
@@ -60,6 +60,7 @@ function createAppStore() {
   // Modals
   const [showIngestModal, setShowIngestModal] = createSignal<boolean>(false);
   const [showRenderModal, setShowRenderModal] = createSignal<boolean>(false);
+  const [showVideoBgModal, setShowVideoBgModal] = createSignal<boolean>(false);
   const [showCommentModal, setShowCommentModal] = createSignal<boolean>(false);
   const [editingToken, setEditingToken] = createSignal<{ lineIdx: number; tokenIdx: number; token: Token } | null>(null);
 
@@ -221,6 +222,25 @@ function createAppStore() {
       setIsSaving(false);
     }
   }
+
+  async function updateBgMeta(meta: Partial<ProjectMetadata>) {
+    const vid = currentVid();
+    if (!vid) return;
+    try {
+      const res = await updateProjectMeta(vid, meta);
+      if (res.ok && projectData()) {
+        setProjectData({
+          ...projectData()!,
+          metadata: res.metadata,
+        });
+      }
+      return res;
+    } catch (e: any) {
+      addToast(`Error updating background: ${e.message}`);
+      throw e;
+    }
+  }
+
 
   function updateActiveLineFromTime(timeMs: number) {
     setCurrentTimeMs(timeMs);
@@ -628,6 +648,9 @@ function createAppStore() {
     setShowIngestModal,
     showRenderModal,
     setShowRenderModal,
+    showVideoBgModal,
+    setShowVideoBgModal,
+    updateBgMeta,
     showCommentModal,
     setShowCommentModal,
     openCommentModal,

@@ -1,4 +1,4 @@
-import { LyricsCandidate, LyricsValidation, ProjectData, ProjectSummary, ScriptDistribution } from './types';
+import { LyricsCandidate, LyricsValidation, ProjectData, ProjectMetadata, ProjectSummary, ScriptDistribution } from './types';
 
 export async function fetchProjects(): Promise<ProjectSummary[]> {
   const res = await fetch('/api/projects');
@@ -75,8 +75,8 @@ export async function saveProject(
 
 export async function updateProjectMeta(
   vid: string,
-  meta: { title?: string; artist?: string; tier_mode?: string }
-): Promise<{ ok: boolean; metadata: any }> {
+  meta: Partial<ProjectMetadata>
+): Promise<{ ok: boolean; metadata: ProjectMetadata }> {
   const res = await fetch(`/api/project/${encodeURIComponent(vid)}/meta`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -85,6 +85,61 @@ export async function updateProjectMeta(
   if (!res.ok) throw new Error('Failed to update project metadata');
   return res.json();
 }
+
+export async function downloadBgMedia(
+  url: string,
+  project?: string
+): Promise<{ ok: boolean; bg_id: string; bg_path: string; media_type: 'video' | 'image'; stream_url: string }> {
+  const res = await fetch('/api/bg-media/download', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, project }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to download background media');
+  }
+  return res.json();
+}
+
+export async function setLocalBgMedia(
+  path: string,
+  project?: string
+): Promise<{ ok: boolean; bg_id: string; bg_path: string; media_type: 'video' | 'image'; stream_url: string }> {
+  const res = await fetch('/api/bg-media/local', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, project }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to load local background media');
+  }
+  return res.json();
+}
+
+export async function uploadBgMedia(
+  file: File,
+  project?: string
+): Promise<{ ok: boolean; bg_id: string; bg_path: string; media_type: 'video' | 'image'; stream_url: string }> {
+  const q = new URLSearchParams();
+  q.set('filename', file.name);
+  if (project) q.set('project', project);
+  const res = await fetch(`/api/bg-media/upload?${q.toString()}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': file.type || 'application/octet-stream',
+      'X-Filename': encodeURIComponent(file.name),
+    },
+    body: file,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to upload background media');
+  }
+  return res.json();
+}
+
 
 export async function updateCustomDict(entries: Record<string, Record<string, { pinyin: string; en: string }>>) {
   const res = await fetch('/api/dict', {

@@ -95,3 +95,124 @@ def get_audio_duration(audio_path: Path) -> float | None:
         return float(res.stdout.strip())
     except Exception:
         return None
+
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
+VIDEO_EXTENSIONS = {".mp4", ".webm", ".mkv", ".mov", ".avi", ".flv", ".ts"}
+
+
+def detect_media_type(path_or_url: str | Path) -> str:
+    path_str = str(path_or_url).split("?")[0].lower()
+    ext = Path(path_str).suffix
+    if ext in IMAGE_EXTENSIONS:
+        return "image"
+    if ext in VIDEO_EXTENSIONS:
+        return "video"
+    return "video"
+
+
+def download_bg_media(url_or_id: str, workdir: Path) -> tuple[str, Path, str]:
+    """
+    Downloads or retrieves background media (video or static image) into work/bg/.
+    Returns (bg_id, file_path, media_type).
+    """
+    bg_dir = workdir / "bg"
+    bg_dir.mkdir(parents=True, exist_ok=True)
+
+    cand_id = extract_youtube_id(url_or_id)
+    if cand_id:
+        for ext in [".mp4", ".webm", ".mkv"]:
+            cand_file = bg_dir / f"{cand_id}{ext}"
+            if cand_file.exists() and cand_file.stat().st_size > 0:
+                print(f"[*] Reusing cached background video: {cand_file}")
+                return cand_id, cand_file, "video"
+
+        target_url = f"https://www.youtube.com/watch?v={cand_id}"
+        print(f"[*] Downloading background video for '{cand_id}'...")
+        run([
+            sys.executable, "-m", "yt_dlp", "--no-playlist",
+            "-f", "bestvideo[height<=1080][ext=mp4]/best[height<=1080][ext=mp4]/bestvideo[height<=1080]/best[height<=1080]/best",
+            "-o", str(bg_dir / f"{cand_id}.%(ext)s"), "--", target_url
+        ])
+
+        for cand_file in bg_dir.glob(f"{cand_id}.*"):
+            if cand_file.suffix.lower() in VIDEO_EXTENSIONS and cand_file.stat().st_size > 0:
+                return cand_id, cand_file, "video"
+        raise RuntimeError(f"Failed to find downloaded background video for {cand_id}")
+
+    s = url_or_id.strip()
+    if s.startswith("http://") or s.startswith("https://"):
+        m_type = detect_media_type(s)
+        clean_name = re.sub(r"[^A-Za-z0-9_-]", "_", Path(s.split("?")[0]).stem)[:32] or "bg"
+        url_hash = abs(hash(s)) % 1000000
+        bg_id = f"{clean_name}_{url_hash}"
+
+        if m_type == "image":
+            import urllib.request
+            ext = Path(s.split("?")[0]).suffix.lower() or ".jpg"
+            out_file = bg_dir / f"{bg_id}{ext}"
+            if not out_file.exists() or out_file.stat().st_size == 0:
+                print(f"[*] Downloading background image from {s} -> {out_file}...")
+                req = urllib.request.Request(s, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req) as resp, open(out_file, "wb") as f:
+                    f.write(resp.read())
+            return bg_id, out_file, "image"
+        else:
+            cand_matches = [f for f in bg_dir.glob(f"{bg_id}.*") if f.suffix.lower() in VIDEO_EXTENSIONS]
+            if cand_matches and cand_matches[0].stat().st_size > 0:
+                return bg_id, cand_matches[0], "video"
+
+            print(f"[*] Downloading background video from {s}...")
+            try:
+                run([
+                    sys.executable, "-m", "yt_dlp", "--no-playlist",
+                    "-f", "bestvideo[height<=1080][ext=mp4]/best[height<=1080][ext=mp4]/bestvideo[height<=1080]/best[height<=1080]/best",
+                    "-o", str(bg_dir / f"{bg_id}.%(ext)s"), "--", s
+                ])
+                for cand_file in bg_dir.glob(f"{bg_id}.*"):
+                    if cand_file.suffix.lower() in VIDEO_EXTENSIONS and cand_file.stat().st_size > 0:
+                        return bg_id, cand_file, "video"
+            except Exception:
+                import urllib.request
+                ext = Path(s.split("?")[0]).suffix.lower() or ".mp4"
+                out_file = bg_dir / f"{bg_id}{ext}"
+                req = urllib.request.Request(s, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req) as resp, open(out_file, "wb") as f:
+                    f.write(resp.read())
+                return bg_id, out_file, detect_media_type(out_file)
+
+    return resolve_local_bg_file(s, workdir)
+
+
+def resolve_local_bg_file(local_path: str | Path, workdir: Path, copy_to_bg_dir: bool = True) -> tuple[str, Path, str]:
+    """
+    Validates a local file path and optionally copies/symlinks it to work/bg/.
+    Returns (bg_id, resolved_path, media_type).
+    """
+    p = Path(local_path).expanduser()
+    if not p.is_absolute():
+        if (workdir / p).exists():
+            p = (workdir / p).resolve()
+        else:
+            p = p.resolve()
+
+    if not p.exists() or not p.is_file():
+        raise FileNotFoundError(f"Background media file not found: {local_path}")
+
+    m_type = detect_media_type(p)
+    bg_dir = workdir / "bg"
+    bg_dir.mkdir(parents=True, exist_ok=True)
+
+    clean_stem = re.sub(r"[^A-Za-z0-9_-]", "_", p.stem)[:32]
+    ext = p.suffix.lower()
+
+    if copy_to_bg_dir and not str(p).startswith(str(bg_dir.resolve())):
+        file_hash = abs(hash(str(p))) % 1000000
+        target = bg_dir / f"{clean_stem}_{file_hash}{ext}"
+        if not target.exists() or target.stat().st_size != p.stat().st_size:
+            import shutil
+            shutil.copyfile(p, target)
+        return target.stem, target, m_type
+
+    return clean_stem, p, m_type
+

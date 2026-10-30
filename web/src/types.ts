@@ -114,16 +114,28 @@ export interface ProjectConfig {
   };
 }
 
+export interface ProjectMetadata {
+  video_id: string;
+  title: string;
+  artist: string;
+  duration?: number;
+  tier_mode?: string;
+  bg_video_id?: string | null;
+  bg_video_path?: string | null;
+  bg_media_path?: string | null;
+  bg_media_type?: 'video' | 'image' | null;
+  bg_offset_ms?: number;
+  bg_dim_pct?: number;
+  bg_media_exists?: boolean;
+  bg_stream_url?: string | null;
+  asr_engine?: string;
+  target_lang?: string;
+}
+
 export interface ProjectData {
   exists: boolean;
   video_id: string;
-  metadata?: {
-    video_id: string;
-    title: string;
-    artist: string;
-    duration?: number;
-    tier_mode?: string;
-  };
+  metadata?: ProjectMetadata;
   lines: Line[];
   config: ProjectConfig;
   lint: LintReport | null;
@@ -132,6 +144,7 @@ export interface ProjectData {
   has_mix: boolean;
   has_video: boolean;
 }
+
 
 export interface ScriptDistribution {
   total_chars: number;

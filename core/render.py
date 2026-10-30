@@ -461,8 +461,18 @@ def generate_ass(lines: list, cfg: dict, ass_path: Path, tier_mode: str | int | 
     return ass_path
 
 
-def render_video(ass_path: Path, output_path: Path, audio_path: Path | None,
-                  video_bg_path: Path | None, cfg: dict, preview_sec: float | None = None):
+def render_video(
+    ass_path: Path,
+    output_path: Path,
+    audio_path: Path | None,
+    video_bg_path: Path | None,
+    cfg: dict,
+    preview_sec: float | None = None,
+    bg_dim_pct: int = 35,
+    bg_offset_ms: int = 0,
+):
+    from core.media import detect_media_type
+
     v_cfg = cfg["video"]
     width = v_cfg["width"]
     height = v_cfg["height"]
@@ -471,12 +481,36 @@ def render_video(ass_path: Path, output_path: Path, audio_path: Path | None,
 
     cmd = ["ffmpeg", "-y"]
 
-    if preview_sec:
-        cmd.extend(["-t", str(preview_sec)])
+    has_audio = False
+    if audio_path and audio_path.exists():
+        has_audio = True
+
+    escaped_ass = str(ass_path).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
 
     if video_bg_path and video_bg_path.exists():
-        print(f"[*] Using video background: {video_bg_path}")
-        cmd.extend(["-i", str(video_bg_path)])
+        m_type = detect_media_type(video_bg_path)
+        print(f"[*] Using {m_type} background: {video_bg_path}")
+        if m_type == "image":
+            cmd.extend(["-loop", "1", "-framerate", str(fps), "-i", str(video_bg_path)])
+        else:
+            if bg_offset_ms > 0:
+                cmd.extend(["-ss", f"{bg_offset_ms / 1000.0:.3f}"])
+            cmd.extend(["-stream_loop", "-1", "-i", str(video_bg_path)])
+
+        if has_audio:
+            print(f"[*] Using audio source: {audio_path}")
+            cmd.extend(["-i", str(audio_path)])
+
+        filters = [f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"]
+        if bg_dim_pct > 0:
+            dim_alpha = max(0.0, min(1.0, bg_dim_pct / 100.0))
+            filters.append(f"drawbox=x=0:y=0:w=iw:h=ih:color=black@{dim_alpha:.2f}:t=fill")
+        filters.append(f"ass='{escaped_ass}'")
+        filter_str = ",".join(filters)
+
+        cmd.extend(["-filter_complex", f"[0:v]{filter_str}[v]", "-map", "[v]"])
+        if has_audio:
+            cmd.extend(["-map", "1:a:0"])
     else:
         duration = None
         if audio_path and audio_path.exists():
@@ -488,14 +522,14 @@ def render_video(ass_path: Path, output_path: Path, audio_path: Path | None,
         print(f"[*] Generating synthetic background: {bg_color} {width}x{height} @ {fps}fps")
         cmd.extend(["-f", "lavfi", "-i", f"color=c={bg_color}:s={width}x{height}:r={fps}{duration_arg}"])
 
-    has_audio = False
-    if audio_path and audio_path.exists():
-        print(f"[*] Using audio source: {audio_path}")
-        cmd.extend(["-i", str(audio_path)])
-        has_audio = True
+        if has_audio:
+            print(f"[*] Using audio source: {audio_path}")
+            cmd.extend(["-i", str(audio_path)])
 
-    escaped_ass = str(ass_path).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
-    cmd.extend(["-vf", f"ass='{escaped_ass}'"])
+        cmd.extend(["-vf", f"ass='{escaped_ass}'"])
+
+    if preview_sec:
+        cmd.extend(["-t", str(preview_sec)])
 
     ext = output_path.suffix.lower()
     if ext == ".webm":
@@ -509,6 +543,7 @@ def render_video(ass_path: Path, output_path: Path, audio_path: Path | None,
 
     cmd.append("-shortest")
     cmd.append(str(output_path))
+
 
     print(f"[*] Running FFmpeg render -> {output_path}...")
     try:

@@ -9,6 +9,7 @@ import { PhoneticModal } from './components/PhoneticModal';
 import { CommentModal } from './components/CommentModal';
 import { IngestModal } from './components/IngestModal';
 import { RenderModal } from './components/RenderModal';
+import { VideoBgModal } from './components/VideoBgModal';
 import './style.css';
 
 const App: Component = () => {
@@ -56,6 +57,7 @@ const App: Component = () => {
       <CommentModal />
       <IngestModal />
       <RenderModal />
+      <VideoBgModal />
 
       {/* Toast Notifications */}
       <div class="toast-container">
