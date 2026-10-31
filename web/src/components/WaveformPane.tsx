@@ -80,6 +80,7 @@ export const WaveformPane: Component<{
     }
 
     props.onRegisterControls({ seekToMs, playBounds });
+    store.registerExternalControls({ togglePlay, seekToMs, seekRelative });
 
     wsRegions = RegionsPlugin.create();
 
@@ -116,16 +117,26 @@ export const WaveformPane: Component<{
       store.updateActiveLineFromTime(curMs);
     });
 
-    ws.on('play', () => store.setIsPlaying(true));
+    ws.on('seeking', (curSec: number) => {
+      const curMs = Math.round(curSec * 1000);
+      store.updateActiveLineFromTime(curMs);
+    });
+
+    ws.on('play', () => {
+      store.setIsPlaying(true);
+      store.broadcastSync('tick');
+    });
     ws.on('pause', () => {
       store.setIsPlaying(false);
       stopAtSec = null;
+      store.broadcastSync('tick');
     });
 
     wsRegions.on('region-updated', (region: any) => {
       const meta = regionMap.get(region.id);
       if (meta) {
         store.updateTokenTimes(meta.lineIdx, meta.tokenIdx, region.start * 1000, region.end * 1000);
+        store.broadcastSync('full');
       }
     });
 
@@ -223,11 +234,14 @@ export const WaveformPane: Component<{
     ws.load(audioUrl).then(() => {
       if (prevTime > 0 && prevTime < ws!.getDuration()) {
         ws!.setTime(prevTime);
+        store.updateActiveLineFromTime(Math.round(prevTime * 1000));
         if (wasPlaying) ws!.play();
       } else {
         const firstLn = store.lines()[store.activeLineIdx()];
         if (firstLn) {
-          ws!.setTime(Math.max(0, (firstLn.start - 300) / 1000.0));
+          const initSec = Math.max(0, (firstLn.start - 300) / 1000.0);
+          ws!.setTime(initSec);
+          store.updateActiveLineFromTime(Math.round(initSec * 1000));
         }
       }
     });

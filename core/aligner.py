@@ -574,7 +574,8 @@ def allocate_chars_to_islands(norm_chars: list[dict], islands: list[tuple[int, i
 
 def align_line_with_clauses(line_text: str, toks: list[dict],
                             fallback_start: int, fallback_end: int,
-                            analyzer: VocalAnalyzer) -> list[dict]:
+                            analyzer: VocalAnalyzer,
+                            drop_silent: bool = True) -> list[dict]:
     norm_chars = tokenize_tokens(line_text)
     if not norm_chars:
         return []
@@ -590,7 +591,7 @@ def align_line_with_clauses(line_text: str, toks: list[dict],
     win_s = min(fallback_start, voiced_toks[0]["start"]) if (voiced_toks and asr_matches_line) else fallback_start
     win_e = fallback_end
 
-    if not voiced_toks and analyzer.rms_db is not None:
+    if drop_silent and not voiced_toks and analyzer.rms_db is not None:
         if analyzer.mean_db(fallback_start, fallback_end) < -44.0:
             s_idx = analyzer._idx(fallback_start)
             e_idx = max(s_idx + 1, analyzer._idx(fallback_end))
@@ -801,6 +802,277 @@ def align_lrc_with_tokens(lrc_lines, tokens, analyzer: VocalAnalyzer | None = No
     return out_lines
 
 
+_MORA_ROMAN_CACHE: dict[str, str] = {}
+_VOWELS = "aiueo"
+
+
+def _mora_roman(mora: str) -> str:
+    r = _MORA_ROMAN_CACHE.get(mora)
+    if r is None:
+        rom, _ = respell_hira_to_romaji_and_en(mora)
+        r = re.sub(r"[^a-z]", "", rom.lower())
+        _MORA_ROMAN_CACHE[mora] = r
+    return r
+
+
+def _ja_units(text: str, char_src: list[int]) -> list[tuple[str, int]]:
+    """
+    Convert a Japanese string to romanized mora units using *contextual* kakasi readings
+    (so e.g. 幾千 -> i-ku-se-n regardless of how the characters were tokenized).
+    Each unit keeps the index of the source token/line its first character came from.
+    """
+    from core.phonetics.ja import kata_to_hira
+
+    kks = _get_kakasi()
+    items = kks.convert(text)
+    if "".join(it["orig"] for it in items) != text:
+        items = [{"orig": ch, "hira": ch} for ch in text]
+    units: list[tuple[str, int]] = []
+    pos = 0
+    for it in items:
+        orig = it["orig"]
+        n = len(orig)
+        hira = kata_to_hira(it.get("hira") or orig)
+        morae = split_morae(hira)
+        for k, m in enumerate(morae):
+            rom = _mora_roman(m)
+            if rom:
+                ci = pos + min(n - 1, int(k * n / max(1, len(morae))))
+                units.append((rom, char_src[ci]))
+        pos += n
+    return units
+
+
+def _spread_over_islands(weights: list[float], lo: int, hi: int,
+                         analyzer: VocalAnalyzer) -> list[tuple[int, int]]:
+    """Distribute consecutive lines over only the *voiced* time inside [lo, hi]."""
+    n = len(weights)
+    if n == 0:
+        return []
+    hi = max(hi, lo + 400 * n)
+    islands = [(a, b) for a, b in analyzer.active_islands(lo, hi, min_island_ms=160) if b > a]
+    if not islands:
+        islands = [(lo, hi)]
+    total = float(sum(b - a for a, b in islands))
+    wsum = float(sum(weights)) or 1.0
+
+    def to_real(v: float) -> int:
+        acc = 0.0
+        for a, b in islands:
+            if v <= acc + (b - a):
+                return int(a + (v - acc))
+            acc += b - a
+        return int(islands[-1][1])
+
+    out, cum = [], 0.0
+    for w in weights:
+        out.append((to_real(cum / wsum * total), to_real((cum + w) / wsum * total)))
+        cum += w
+    return out
+
+
+def _dp_anchor_plain_lines(clean_lines: list[str], tokens: list[dict], is_ja: bool,
+                           analyzer: VocalAnalyzer, first_vocal_ms: int) -> list[dict]:
+    """
+    Globally align every pasted lyric line to the ASR stream with a monotonic
+    (Needleman-Wunsch style) phonetic alignment, so repeated choruses, garbled ASR
+    stretches and skipped lines cannot derail later lines the way greedy matching does.
+    Returns one anchor dict per lyric line: {text, start, end, tokens, conf}.
+    """
+    # ---- ASR units (drop whisper "iiiii…" style repetition loops) ----
+    atoks: list[dict] = []
+    i = 0
+    while i < len(tokens):
+        j = i
+        while j < len(tokens) and tokens[j].get("text") == tokens[i].get("text"):
+            j += 1
+        if j - i < 5:
+            atoks.extend(tokens[i:j])
+        i = j
+
+    a_units: list[dict] = []
+    if is_ja:
+        a_text = "".join(t["text"] for t in atoks)
+        a_src = [k for k, t in enumerate(atoks) for _ in t["text"]]
+        raw = _ja_units(a_text, a_src)
+    else:
+        raw = [(_token_phonetic_str(t["text"]), k) for k, t in enumerate(atoks)]
+        raw = [(r, k) for r, k in raw if r]
+    k = 0
+    while k < len(raw):
+        e = k
+        while e < len(raw) and raw[e][1] == raw[k][1]:
+            e += 1
+        tok = atoks[raw[k][1]]
+        span = max(40, tok["end"] - tok["start"])
+        cnt = e - k
+        for q in range(cnt):
+            a_units.append({
+                "rom": raw[k + q][0],
+                "s": int(tok["start"] + span * q / cnt),
+                "e": int(tok["start"] + span * (q + 1) / cnt),
+            })
+        k = e
+
+    # ---- Lyric units ----
+    l_units: list[tuple[str, int]] = []
+    for li, line in enumerate(clean_lines):
+        if is_ja:
+            l_units.extend(_ja_units(line, [li] * len(line)))
+        else:
+            for ch in tokenize_text(line):
+                r = _token_phonetic_str(ch)
+                if r:
+                    l_units.append((r, li))
+
+    n, m = len(l_units), len(a_units)
+    total_ms = len(analyzer.rms_db) * analyzer.frame_ms if analyzer.rms_db is not None else (
+        (tokens[-1]["end"] + 2000) if tokens else 60000)
+
+    hits_by_line: dict[int, list[tuple[int, int]]] = {}
+    matched_units = 0
+    if n and m:
+        EQ, GAP_L, SKIP_A = 1.3, -0.8, -0.10
+        if is_ja:
+            ids: dict[str, int] = {}
+            lid = np.array([ids.setdefault(r, len(ids)) for r, _ in l_units])
+            aid = np.array([ids.setdefault(u["rom"], len(ids)) for u in a_units])
+            names = [""] * len(ids)
+            for r, v in ids.items():
+                names[v] = r
+            vow = np.array([ord(r[-1]) if r[-1] in _VOWELS else 0 for r in names])
+            con = np.array([hash(r[:-1] if r[-1] in _VOWELS else r) for r in names])
+            con_empty = np.array([(r[:-1] if r[-1] in _VOWELS else r) == "" for r in names])
+            eq = lid[:, None] == aid[None, :]
+            same_c = (con[lid][:, None] == con[aid][None, :]) & ~con_empty[lid][:, None]
+            same_v = (vow[lid][:, None] == vow[aid][None, :]) & (vow[lid][:, None] != 0)
+            S = np.where(eq, EQ, np.where(same_c, -0.2, np.where(same_v, -0.4, -0.9)))
+        else:
+            S = np.full((n, m), -0.9)
+            cache: dict[tuple[str, str], float] = {}
+            for x, (lr, _) in enumerate(l_units):
+                for y, au in enumerate(a_units):
+                    key = (lr, au["rom"])
+                    v = cache.get(key)
+                    if v is None:
+                        r = fuzz.ratio(lr, au["rom"])
+                        v = EQ if r >= 85 else (2.0 * r / 100.0 - 1.1 if r >= 50 else -0.9)
+                        cache[key] = v
+                    S[x, y] = v
+
+        dp = np.zeros((n + 1, m + 1), dtype=np.float64)
+        dp[:, 0] = np.arange(n + 1) * GAP_L
+        jj = np.arange(m + 1, dtype=np.float64)
+        for r in range(1, n + 1):
+            cand = np.full(m + 1, -1e18)
+            cand[1:] = np.maximum(dp[r - 1, :-1] + S[r - 1], dp[r - 1, 1:] + GAP_L)
+            cand[0] = dp[r - 1, 0] + GAP_L
+            # left moves (skip ASR unit) via prefix-max trick
+            dp[r] = np.maximum.accumulate(cand - SKIP_A * jj) + SKIP_A * jj
+            dp[r, 0] = dp[r - 1, 0] + GAP_L
+
+        r, c = n, int(np.argmax(dp[n]))
+        pairs: list[tuple[int, int]] = []
+        while r > 0:
+            if c > 0 and abs(dp[r, c] - (dp[r - 1, c - 1] + S[r - 1, c - 1])) < 1e-6:
+                if S[r - 1, c - 1] >= EQ - 1e-9:
+                    pairs.append((r - 1, c - 1))
+                r -= 1
+                c -= 1
+            elif abs(dp[r, c] - (dp[r - 1, c] + GAP_L)) < 1e-6 or c == 0:
+                r -= 1
+            else:
+                c -= 1
+        pairs.reverse()
+        matched_units = len(pairs)
+        for ui, aj in pairs:
+            hits_by_line.setdefault(l_units[ui][1], []).append((ui, aj))
+
+    # ---- Per-line anchors from hits ----
+    line_units: dict[int, list[int]] = {}
+    for ui, (_, li) in enumerate(l_units):
+        line_units.setdefault(li, []).append(ui)
+
+    anchors: list[dict | None] = []
+    prev_hit_end = first_vocal_ms
+    for li, line in enumerate(clean_lines):
+        hits = hits_by_line.get(li, [])
+        need = max(2, int(np.ceil(0.25 * len(line_units.get(li, [])))))
+        if hits:
+            clusters, cur = [], [hits[0]]
+            for h in hits[1:]:
+                if a_units[h[1]]["s"] - a_units[cur[-1][1]]["e"] > 3500:
+                    clusters.append(cur)
+                    cur = [h]
+                else:
+                    cur.append(h)
+            clusters.append(cur)
+            hits = max(clusters, key=len)
+        if len(hits) >= need:
+            fs, le = a_units[hits[0][1]]["s"], a_units[hits[-1][1]]["e"]
+            first_ui, last_ui = hits[0][0], hits[-1][0]
+            lu = line_units[li]
+            avg = min(450.0, max(120.0, (le - fs) / max(1, last_ui - first_ui + 1)))
+            lead = (first_ui - lu[0]) * avg
+            trail = (lu[-1] - last_ui) * avg
+            start = int(max(fs - lead, min(fs, prev_hit_end + 20)))
+            end = int(max(start + 250, le + trail))
+            anchors.append({"text": line, "start": start, "end": end, "conf": True})
+            prev_hit_end = max(prev_hit_end + 20, le)
+        else:
+            anchors.append(None)
+
+    # Clamp confident anchor ends so a trailing estimate never overlaps the next confident anchor
+    conf_indices = [idx for idx, a in enumerate(anchors) if a is not None]
+    for c_pos in range(len(conf_indices) - 1):
+        i_cur = conf_indices[c_pos]
+        i_nxt = conf_indices[c_pos + 1]
+        gap_lines = i_nxt - i_cur - 1
+        min_gap_ms = 600 * gap_lines + 20
+        if anchors[i_cur]["end"] > anchors[i_nxt]["start"] - min_gap_ms:
+            mid = (anchors[i_cur]["end"] + anchors[i_nxt]["start"]) // 2
+            half = min_gap_ms // 2
+            anchors[i_cur]["end"] = max(anchors[i_cur]["start"] + 300, mid - half)
+            if gap_lines > 0 and anchors[i_nxt]["start"] - anchors[i_cur]["end"] < min_gap_ms:
+                anchors[i_nxt]["start"] = min(
+                    anchors[i_nxt]["end"] - 300,
+                    anchors[i_cur]["end"] + min_gap_ms,
+                )
+
+    # ---- Interpolate unmatched lines between matched neighbours over voiced time ----
+    li = 0
+    while li < len(anchors):
+        if anchors[li] is not None:
+            li += 1
+            continue
+        k = li
+        while k < len(anchors) and anchors[k] is None:
+            k += 1
+        lo = anchors[li - 1]["end"] if li > 0 else first_vocal_ms
+        hi = anchors[k]["start"] if k < len(anchors) else total_ms
+        lo = int(lo + (80 if li > 0 else 0))
+        hi = int(hi - (80 if k < len(anchors) else 0))
+        span_needed = max(320 * (k - li), 400)
+        if hi < lo + span_needed and k < len(anchors):
+            hi = max(lo + span_needed, anchors[k]["start"])
+            anchors[k]["start"] = max(anchors[k]["start"], hi + 20)
+            anchors[k]["end"] = max(anchors[k]["end"], anchors[k]["start"] + 300)
+        weights = [float(max(1, sum(count_syllables(c) for c in tokenize_text(clean_lines[x])))) for x in range(li, k)]
+        for x, (s_, e_) in zip(range(li, k), _spread_over_islands(weights, lo, max(hi, lo + span_needed), analyzer)):
+            anchors[x] = {"text": clean_lines[x], "start": int(s_), "end": int(max(e_, s_ + 260)), "conf": False}
+        li = k
+
+    out = []
+    for a in anchors:
+        a["tokens"] = [t for t in tokens if a["conf"] and t["start"] >= a["start"] - 150 and t["end"] <= a["end"] + 150]
+        out.append(a)
+    ratio = matched_units / max(1, n)
+    conf_lines = sum(1 for a in out if a["conf"])
+    print(f"  [plain-align] DP phonetic match: {conf_lines}/{len(out)} lines anchored, "
+          f"{matched_units}/{n} sounds ({ratio:.0%}) matched ASR", flush=True)
+    return out
+
+
 def align_plain_lyrics_with_tokens(plain_lines: list[str], tokens: list[dict], analyzer: VocalAnalyzer | None = None) -> list[dict]:
     """
     Align plain unsynchronized lyrics text lines against ASR tokens and vocal acoustic energy.
@@ -829,7 +1101,15 @@ def align_plain_lyrics_with_tokens(plain_lines: list[str], tokens: list[dict], a
 
     cur_tok_idx = 0
     anchors = []
-    for line in clean_lines:
+    use_dp = bool(tokens)
+    if use_dp:
+        try:
+            anchors = _dp_anchor_plain_lines(clean_lines, tokens, is_ja, analyzer, first_vocal_ms)
+        except Exception as e:  # never let the global matcher break alignment
+            print(f"  [plain-align] DP anchoring failed ({e}); using greedy matcher", flush=True)
+            anchors = []
+            use_dp = False
+    for line in ([] if use_dp else clean_lines):
         norm_chars = tokenize_text(line, lang="ja" if is_ja else None)
         m_chars = len(norm_chars)
         if m_chars == 0:
@@ -898,9 +1178,18 @@ def align_plain_lyrics_with_tokens(plain_lines: list[str], tokens: list[dict], a
     out_lines = []
     for idx, anc in enumerate(anchors):
         next_s = anchors[idx + 1]["start"] if idx + 1 < len(anchors) else anc["end"] + 1500
+        if anc.get("conf") and next_s - anc["end"] > 2500:
+            next_s = anc["end"] + 1200
         if next_s <= anc["start"] + 200:
             next_s = max(anc["end"], anc["start"] + 1200)
-        tok_list = align_line_with_clauses(anc["text"], anc["tokens"], anc["start"], next_s, analyzer)
+        tok_list = align_line_with_clauses(
+            anc["text"],
+            anc["tokens"],
+            anc["start"],
+            next_s,
+            analyzer,
+            drop_silent=False,
+        )
         if tok_list:
             out_lines.append({
                 "start": tok_list[0]["start"],

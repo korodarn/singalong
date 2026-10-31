@@ -502,6 +502,9 @@ def render_video(
             cmd.extend(["-i", str(audio_path)])
 
         filters = [f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"]
+        if m_type == "video" and bg_offset_ms < 0:
+            delay_ms = abs(int(bg_offset_ms))
+            filters.append(f"tpad=start_duration={delay_ms}ms:start_mode=clone")
         if bg_dim_pct > 0:
             dim_alpha = max(0.0, min(1.0, bg_dim_pct / 100.0))
             filters.append(f"drawbox=x=0:y=0:w=iw:h=ih:color=black@{dim_alpha:.2f}:t=fill")

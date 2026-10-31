@@ -1430,3 +1430,369 @@ button.btn-danger:hover:not(:disabled) { background: var(--accent-danger); color
   font-size: 12px;
 }
 
+.stage-popout-btn {
+  background: rgba(99, 102, 241, 0.18);
+  border-color: rgba(99, 102, 241, 0.45);
+  color: #c7d2fe;
+}
+.stage-popout-btn:hover {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #fff;
+}
+
+/* Detached 1080p Video Render Simulator Window */
+.detached-stage-shell {
+  width: 100vw;
+  height: 100vh;
+  background: #05070b;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  user-select: none;
+}
+
+.sim-top-bar {
+  background: rgba(11, 14, 20, 0.92);
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+  z-index: 30;
+}
+
+.sim-top-left, .sim-top-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sim-badge-live {
+  background: rgba(239, 68, 68, 0.18);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  font-size: 10px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+}
+
+.sim-project-title {
+  font-weight: 700;
+  font-size: 13px;
+  color: #fff;
+}
+
+.sim-project-artist {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.sim-restore-hud-btn {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 50;
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid var(--border-bright);
+  color: var(--text-muted);
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0.35;
+  transition: opacity 0.2s;
+}
+.sim-restore-hud-btn:hover {
+  opacity: 1;
+  color: #fff;
+}
+
+.sim-viewport-container {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+  background: #020305;
+  cursor: pointer;
+}
+
+.sim-canvas-1080p {
+  width: 1920px;
+  height: 1080px;
+  position: relative;
+  background: #000000;
+  overflow: hidden;
+  flex-shrink: 0;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  transform-origin: center center;
+}
+
+.sim-bg-solid {
+  position: absolute;
+  inset: 0;
+  background: #000000;
+}
+
+.sim-bg-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  z-index: 1;
+}
+
+.sim-bg-media {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  display: block;
+}
+
+.sim-bg-dimmer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Guides Overlay */
+.sim-guides-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  pointer-events: none;
+}
+
+.sim-guide-title-safe {
+  position: absolute;
+  left: 96px;
+  right: 96px;
+  top: 54px;
+  bottom: 54px;
+  border: 2px dashed rgba(56, 189, 248, 0.35);
+}
+
+.sim-guide-center-h {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 540px;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.sim-guide-center-v {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 960px;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.sim-guide-sub-baseline {
+  position: absolute;
+  left: 70px;
+  right: 70px;
+  bottom: 100px;
+  border-bottom: 2px solid rgba(255, 215, 0, 0.5);
+  color: rgba(255, 215, 0, 0.8);
+  font-family: var(--font-mono);
+  font-size: 18px;
+  padding-bottom: 4px;
+}
+
+.sim-upcoming-cue {
+  position: absolute;
+  bottom: 44px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 12;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  padding: 8px 20px;
+  border-radius: 999px;
+  font-size: 22px;
+  color: var(--text-muted);
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  backdrop-filter: blur(4px);
+}
+.sim-upcoming-cue strong {
+  color: #fff;
+}
+
+/* ASS-Simulated Subtitle Layers on 1920x1080 Canvas */
+.sim-sub-layer-lead {
+  position: absolute;
+  left: 70px;
+  right: 70px;
+  bottom: 100px;
+  z-index: 10;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  pointer-events: none;
+}
+
+.sim-sub-layer-backing {
+  position: absolute;
+  left: 40px;
+  right: 80px;
+  bottom: 280px;
+  z-index: 9;
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-end;
+  pointer-events: none;
+}
+
+.sim-ass-line {
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+}
+
+.sim-ruby-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  flex-wrap: nowrap;
+}
+
+.sim-ruby-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.sim-tier-en,
+.sim-tier-py,
+.sim-tier-hz,
+.sim-inline-tok {
+  white-space: nowrap;
+  line-height: 1.18;
+  filter:
+    drop-shadow(2px 2px 0 #000)
+    drop-shadow(-2px -2px 0 #000)
+    drop-shadow(2px -2px 0 #000)
+    drop-shadow(-2px 2px 0 #000)
+    drop-shadow(0 3px 6px rgba(0, 0, 0, 0.85));
+}
+
+.sim-tier-en {
+  font-weight: 500;
+  margin-bottom: 8px;
+  background: linear-gradient(to right, #FFD700 var(--wipe-pct, 0%), #B0B0B0 var(--wipe-pct, 0%));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.sim-tier-py {
+  font-weight: 600;
+  margin-bottom: 10px;
+  background: linear-gradient(to right, #FFD700 var(--wipe-pct, 0%), #E0E0E0 var(--wipe-pct, 0%));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.sim-tier-hz,
+.sim-inline-tok.lead {
+  font-weight: 800;
+  font-family: var(--font-cjk);
+  background: linear-gradient(to right, #FFD700 var(--wipe-pct, 0%), #FFFFFF var(--wipe-pct, 0%));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.sim-ruby-col.backing .sim-tier-en,
+.sim-ruby-col.backing .sim-tier-py,
+.sim-ruby-col.backing .sim-tier-hz,
+.sim-inline-tok.backing {
+  font-style: italic;
+  background: linear-gradient(to right, #70D6FF var(--wipe-pct, 0%), #D0E8FF var(--wipe-pct, 0%));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.sim-single-tier-flow {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  flex-wrap: nowrap;
+}
+
+.sim-affix {
+  font-size: 48px;
+  font-weight: 700;
+  font-style: italic;
+  color: #D0E8FF;
+  text-shadow: 0 2px 6px #000;
+  margin: 0 6px;
+}
+
+/* Bottom Transport Bar */
+.sim-bottom-bar {
+  background: rgba(11, 14, 20, 0.94);
+  border-top: 1px solid var(--border-subtle);
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+  z-index: 30;
+}
+
+.sim-transport-left, .sim-transport-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.sim-timecode {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-left: 4px;
+}
+.sim-timecode strong {
+  color: var(--accent-lead);
+}
+
+.sim-scrubber-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.sim-scrubber {
+  width: 100%;
+  cursor: pointer;
+  accent-color: var(--accent-lead);
+}
+
+.sim-sync-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+

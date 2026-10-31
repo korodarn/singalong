@@ -6,7 +6,7 @@ export const KaraokeStage: Component<{
   onPlayBounds: (startMs: number, endMs?: number) => void;
 }> = (props) => {
   const [stageHeight, setStageHeight] = createSignal<number>(195);
-  let bgVideoRef: HTMLVideoElement | undefined;
+  const [videoEl, setVideoEl] = createSignal<HTMLVideoElement | null>(null);
 
   const meta = () => store.projectData()?.metadata;
   const hasBgMedia = () => Boolean(meta()?.bg_media_path || meta()?.bg_video_path);
@@ -14,6 +14,14 @@ export const KaraokeStage: Component<{
   const bgMediaType = () => meta()?.bg_media_type || (meta()?.bg_media_path?.match(/\.(jpe?g|png|webp|bmp)$/i) ? 'image' : 'video');
   const bgOffsetMs = () => meta()?.bg_offset_ms || 0;
   const bgDimPct = () => meta()?.bg_dim_pct ?? 35;
+
+  const computeTargetSec = (audioTimeMs: number, offsetMs: number, dur?: number) => {
+    const rawSec = Math.max(0, (audioTimeMs + offsetMs) / 1000.0);
+    if (dur && isFinite(dur) && dur > 0.5) {
+      return rawSec % dur;
+    }
+    return rawSec;
+  };
 
   onMount(() => {
     const saved = localStorage.getItem('singalong_preview_height');
@@ -24,24 +32,42 @@ export const KaraokeStage: Component<{
   });
 
   createEffect(() => {
-    if (!bgVideoRef || bgMediaType() !== 'video') return;
+    const v = videoEl();
+    const mType = bgMediaType();
     const playing = store.isPlaying();
     const rate = store.playbackRate();
-    bgVideoRef.playbackRate = rate;
+    const url = bgStreamUrl();
+    if (!v || mType !== 'video' || !url) return;
+
+    v.muted = true;
+    v.playbackRate = rate;
     if (playing) {
-      bgVideoRef.play().catch(() => {});
+      const targetSec = computeTargetSec(store.currentTimeMs(), bgOffsetMs(), v.duration);
+      if (Math.abs(v.currentTime - targetSec) > 0.35) {
+        try {
+          v.currentTime = targetSec;
+        } catch {}
+      }
+      v.play().catch(() => {});
     } else {
-      bgVideoRef.pause();
+      v.pause();
     }
   });
 
   createEffect(() => {
-    if (!bgVideoRef || bgMediaType() !== 'video') return;
+    const v = videoEl();
+    const mType = bgMediaType();
     const audioTimeMs = store.currentTimeMs();
     const offset = bgOffsetMs();
-    const targetSec = Math.max(0, (audioTimeMs + offset) / 1000.0);
-    if (Math.abs(bgVideoRef.currentTime - targetSec) > 0.25) {
-      bgVideoRef.currentTime = targetSec;
+    const playing = store.isPlaying();
+    if (!v || mType !== 'video') return;
+
+    const targetSec = computeTargetSec(audioTimeMs, offset, v.duration);
+    const threshold = playing ? 0.35 : 0.04;
+    if (Math.abs(v.currentTime - targetSec) > threshold) {
+      try {
+        v.currentTime = targetSec;
+      } catch {}
     }
   });
 
@@ -114,11 +140,24 @@ export const KaraokeStage: Component<{
               }
             >
               <video
-                ref={bgVideoRef}
+                ref={(el) => setVideoEl(el)}
                 src={bgStreamUrl()}
                 muted
                 playsinline
                 loop
+                preload="auto"
+                onLoadedMetadata={(e) => {
+                  const v = e.currentTarget;
+                  v.muted = true;
+                  v.playbackRate = store.playbackRate();
+                  const targetSec = computeTargetSec(store.currentTimeMs(), bgOffsetMs(), v.duration);
+                  try {
+                    v.currentTime = targetSec;
+                  } catch {}
+                  if (store.isPlaying()) {
+                    v.play().catch(() => {});
+                  }
+                }}
                 class="stage-bg-media"
               />
             </Show>
@@ -153,6 +192,13 @@ export const KaraokeStage: Component<{
                   {hasBgMedia()
                     ? `🎬 BG: ${bgMediaType() === 'image' ? '🖼️ Image' : '🎥 Video'} (${bgDimPct()}%)`
                     : '🎬 Set Background'}
+                </button>
+                <button
+                  class="stage-bg-btn stage-popout-btn"
+                  onClick={() => store.openStagePopupWindow()}
+                  title="Detach a 16:9 1920x1080 Video Render Simulator in a separate window"
+                >
+                  📺 Pop-Out Video Monitor
                 </button>
                 <span class="stage-hint">
                   Click: Select/Play • Shift+Click: Range • Alt+Click: Delete • [C]: Comment • Double-Click: Phonetics

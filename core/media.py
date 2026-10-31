@@ -111,6 +111,12 @@ def detect_media_type(path_or_url: str | Path) -> str:
     return "video"
 
 
+def download_bg_video(video_url_or_id: str, workdir: Path) -> Path:
+    """Downloads or retrieves background video into work/bg/ and returns the file path."""
+    _, file_path, _ = download_bg_media(video_url_or_id, workdir)
+    return file_path
+
+
 def download_bg_media(url_or_id: str, workdir: Path) -> tuple[str, Path, str]:
     """
     Downloads or retrieves background media (video or static image) into work/bg/.
@@ -131,7 +137,7 @@ def download_bg_media(url_or_id: str, workdir: Path) -> tuple[str, Path, str]:
         print(f"[*] Downloading background video for '{cand_id}'...")
         run([
             sys.executable, "-m", "yt_dlp", "--no-playlist",
-            "-f", "bestvideo[height<=1080][ext=mp4]/best[height<=1080][ext=mp4]/bestvideo[height<=1080]/best[height<=1080]/best",
+            "-f", "bestvideo[height<=1080][vcodec^=avc1][ext=mp4]/bestvideo[height<=1080][ext=mp4]/best[height<=1080][ext=mp4]/bestvideo[height<=1080]/best[height<=1080]/best",
             "-o", str(bg_dir / f"{cand_id}.%(ext)s"), "--", target_url
         ])
 
@@ -166,7 +172,7 @@ def download_bg_media(url_or_id: str, workdir: Path) -> tuple[str, Path, str]:
             try:
                 run([
                     sys.executable, "-m", "yt_dlp", "--no-playlist",
-                    "-f", "bestvideo[height<=1080][ext=mp4]/best[height<=1080][ext=mp4]/bestvideo[height<=1080]/best[height<=1080]/best",
+                    "-f", "bestvideo[height<=1080][vcodec^=avc1][ext=mp4]/bestvideo[height<=1080][ext=mp4]/best[height<=1080][ext=mp4]/bestvideo[height<=1080]/best[height<=1080]/best",
                     "-o", str(bg_dir / f"{bg_id}.%(ext)s"), "--", s
                 ])
                 for cand_file in bg_dir.glob(f"{bg_id}.*"):

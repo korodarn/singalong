@@ -10,6 +10,7 @@ import { CommentModal } from './components/CommentModal';
 import { IngestModal } from './components/IngestModal';
 import { RenderModal } from './components/RenderModal';
 import { VideoBgModal } from './components/VideoBgModal';
+import { DetachedStageWindow } from './components/DetachedStageWindow';
 import './style.css';
 
 const App: Component = () => {
@@ -26,10 +27,14 @@ const App: Component = () => {
       await store.selectProject(target);
     } else if (list.length > 0) {
       await store.selectProject(list[0].id);
-    } else {
+    } else if (!store.isStageWindow) {
       store.setShowIngestModal(true);
     }
   });
+
+  if (store.isStageWindow) {
+    return <DetachedStageWindow />;
+  }
 
   const handleSeek = (ms: number) => {
     waveControls?.seekToMs(ms);

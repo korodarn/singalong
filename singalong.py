@@ -157,8 +157,18 @@ def main():
         if parsed:
             print(f"[*] Using confirmed synchronized LRC: {args.lyrics_file} ({len(parsed)} lines)")
             chosen_synced = parsed
-            # Also update local verified cache
-            (args.workdir / f"{vid}.netease.lrc").write_text(raw_text, encoding="utf-8")
+            # Only update local verified cache if this is not just the raw ASR transcript fallback
+            asr_grouped_texts = {
+                "".join(t["text"] + (" " if t.get("space") else "") for t in ln["tokens"]).strip()
+                for ln in group_lines(raw_tokens)
+            }
+            parsed_texts = [p["text"].strip() for p in parsed if p.get("text", "").strip()]
+            asr_overlap = (
+                sum(1 for pt in parsed_texts if pt in asr_grouped_texts) / len(parsed_texts)
+                if parsed_texts else 1.0
+            )
+            if asr_overlap < 0.6:
+                (args.workdir / f"{vid}.netease.lrc").write_text(raw_text, encoding="utf-8")
         else:
             lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
             print(f"[*] Using confirmed plain lyrics: {args.lyrics_file} ({len(lines)} lines)")

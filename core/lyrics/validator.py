@@ -220,8 +220,13 @@ def validate_lyrics_candidate(
 
         # If audio contains English (>30% Latin) AND candidate is English AND title matches (e.g. "Thawing Light"),
         # paraformer-zh ASR may have transcribed some English singing into Chinese homophones ("每一段那"),
-        # lowering literal overlap. Trust Title + English script match!
-        if asr_script["latin_ratio"] >= 0.30 and script["dominant"] == "en" and title_matched and (dur_matched or not cand_duration_s):
+        # lowering literal overlap. Trust Title + English script match only when target_lang/title is not explicitly CJK/JA/KO.
+        inferred_non_en = bool(
+            (target_lang and target_lang.lower().strip() in ("ja", "japanese", "ko", "korean", "zh", "chinese", "mandarin"))
+            or re.search(r"\b(jp|jpn|japanese|kr|kor|korean|cn|chinese)\s*(ver|version|lyrics)?\b", (query_title or "") + " " + (cand_title or ""), re.I)
+            or asr_script["dominant"] in ("ja", "ko")
+        )
+        if not inferred_non_en and asr_script["latin_ratio"] >= 0.30 and script["dominant"] == "en" and title_matched and (dur_matched or not cand_duration_s):
             score = max(sim, 0.85 if dur_matched else 0.75)
             return True, f"Verified English title match ({len(clean_lines)} lines)", round(score, 3)
 

@@ -122,7 +122,11 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, format, *args):
-        if len(args) >= 1 and isinstance(args[0], str) and args[0].startswith("GET /api/audio/"):
+        if len(args) >= 1 and isinstance(args[0], str) and (
+            args[0].startswith("GET /api/audio/")
+            or args[0].startswith("GET /api/bg-media/")
+            or args[0].startswith("GET /api/bg-video/")
+        ):
             return
         super().log_message(format, *args)
 
@@ -193,6 +197,12 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
                     self.serve_video_file(vid)
                 else:
                     self.send_error(400, "Missing video id")
+            elif path == "/api/bg-video/fetch":
+                url = query.get("url", [""])[0].strip()
+                vid = query.get("project", [""])[0].strip()
+                self.serve_bg_video_fetch_sse(url, vid)
+            elif path.startswith("/api/bg-video/stream"):
+                self.serve_bg_media_file(path, query)
             elif path.startswith("/api/bg-media/"):
                 self.serve_bg_media_file(path, query)
             elif path == "/api/dict":
@@ -639,6 +649,57 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
             })
         except Exception as e:
             self.send_json({"ok": False, "error": str(e)}, status=500)
+
+    def serve_bg_video_fetch_sse(self, url: str, vid: str):
+        self.close_connection = True
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+        def send_event(event_type: str, data: dict):
+            try:
+                payload = json.dumps({"type": event_type, **data})
+                self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+                self.wfile.flush()
+            except Exception:
+                pass
+
+        if not url:
+            send_event("error", {"message": "Missing URL"})
+            return
+
+        try:
+            send_event("log", {"text": f"Fetching background media for '{url}'..."})
+            bg_id, bg_path, m_type = download_bg_media(url, self.server.workdir)
+            stream_url = f"/api/bg-media/stream?path={bg_path.name}"
+
+            if vid:
+                meta_path = self.server.workdir / f"{vid}.meta.json"
+                current = {"video_id": vid, "title": vid, "artist": "", "duration": 0}
+                if meta_path.exists():
+                    try:
+                        current.update(json.loads(meta_path.read_text(encoding="utf-8")))
+                    except Exception:
+                        pass
+                current["bg_media_path"] = str(bg_path)
+                current["bg_media_type"] = m_type
+                if m_type == "video":
+                    current["bg_video_id"] = bg_id
+                    current["bg_video_path"] = str(bg_path)
+                meta_path.write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
+
+            send_event("complete", {
+                "ok": True,
+                "bg_id": bg_id,
+                "bg_path": str(bg_path),
+                "media_type": m_type,
+                "stream_url": stream_url,
+            })
+        except Exception as e:
+            send_event("error", {"message": str(e)})
 
     def handle_bg_media_local(self):
         content_length = int(self.headers.get("Content-Length", 0))

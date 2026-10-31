@@ -132,6 +132,8 @@ def transcribe_whisper(
         word_timestamps=True,
         vad_filter=False,
         condition_on_previous_text=False,
+        repetition_penalty=1.15,
+        no_repeat_ngram_size=3,
     )
 
     print(f"  [Whisper] Detected language: {info.language} (prob={info.language_probability:.2f})")
@@ -264,19 +266,41 @@ def transcribe(
     resolved_engine = resolve_asr_engine(engine, lang, workdir, vid)
 
     engine_cache = workdir / f"{vid}.asr.{resolved_engine}.json"
-    legacy_cache = workdir / f"{vid}.asr.json"
+    para_cache = workdir / f"{vid}.asr.paraformer.json"
+    legacy_cache = workdir / f"{vid}.asr.json"  # legacy name: paraformer output only
+
+    def _load(p: Path) -> dict | None:
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+            return d if d.get("text") is not None and d.get("stamps") is not None else None
+        except Exception:
+            return None
 
     if not force_asr:
-        if engine_cache.exists():
+        cached = _load(engine_cache) if engine_cache.exists() else None
+        if cached is not None and resolved_engine != "paraformer":
+            # Older versions saved a *paraformer fallback* under the whisper/sensevoice name.
+            # Detect that (declared engine mismatch, or text identical to the paraformer cache) and ignore it.
+            poisoned = cached.get("engine") not in (None, resolved_engine)
+            for other in (para_cache, legacy_cache):
+                if not poisoned and other.exists():
+                    o = _load(other)
+                    if o is not None and o.get("text") == cached.get("text"):
+                        poisoned = True
+            if poisoned:
+                print(f"  [!] Ignoring poisoned {resolved_engine} ASR cache (paraformer output saved under wrong engine): {engine_cache}")
+                cached = None
+        if cached is not None:
             print(f"[3/4] Reusing cached ASR timestamps ({resolved_engine}): {engine_cache}")
-            cached = json.loads(engine_cache.read_text(encoding="utf-8"))
             return cached["text"], cached["stamps"]
         if resolved_engine == "paraformer" and legacy_cache.exists():
-            print(f"[3/4] Reusing cached ASR timestamps (paraformer): {legacy_cache}")
-            cached = json.loads(legacy_cache.read_text(encoding="utf-8"))
-            return cached["text"], cached["stamps"]
+            cached = _load(legacy_cache)
+            if cached is not None and cached.get("engine") in (None, "paraformer"):
+                print(f"[3/4] Reusing cached ASR timestamps (paraformer): {legacy_cache}")
+                return cached["text"], cached["stamps"]
 
     print(f"[3/4] Transcribing with ASR engine '{resolved_engine}' (lang={lang or 'auto'})...")
+    used_engine = resolved_engine
     try:
         if resolved_engine == "whisper":
             text, stamps = transcribe_whisper(wav, device, lang=lang)
@@ -286,18 +310,18 @@ def transcribe(
             text, stamps = transcribe_paraformer(wav, device)
     except Exception as e:
         if resolved_engine != "paraformer":
-            print(f"  [!] ASR engine '{resolved_engine}' failed ({e}); falling back to 'paraformer'...")
-            if legacy_cache.exists() and not force_asr:
-                cached = json.loads(legacy_cache.read_text(encoding="utf-8"))
-                return cached["text"], cached["stamps"]
+            print(f"  [!] ASR engine '{resolved_engine}' failed ({e}); falling back to 'paraformer' (NOT cached as {resolved_engine})...")
+            used_engine = "paraformer"
             text, stamps = transcribe_paraformer(wav, device)
         else:
             raise
 
     payload = json.dumps(
-        {"engine": resolved_engine, "lang": lang or "auto", "text": text, "stamps": stamps},
+        {"engine": used_engine, "lang": lang or "auto", "text": text, "stamps": stamps},
         ensure_ascii=False,
     )
-    engine_cache.write_text(payload, encoding="utf-8")
-    legacy_cache.write_text(payload, encoding="utf-8")
+    (workdir / f"{vid}.asr.{used_engine}.json").write_text(payload, encoding="utf-8")
+    if used_engine == "paraformer":
+        legacy_cache.write_text(payload, encoding="utf-8")
     return text, stamps
+

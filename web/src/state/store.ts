@@ -64,6 +64,130 @@ function createAppStore() {
   const [showCommentModal, setShowCommentModal] = createSignal<boolean>(false);
   const [editingToken, setEditingToken] = createSignal<{ lineIdx: number; tokenIdx: number; token: Token } | null>(null);
 
+  // Cross-window BroadcastChannel for Detached Stage Monitor
+  const isStageWindow = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('view') === 'stage';
+  const stageChannel: BroadcastChannel | null =
+    typeof window !== 'undefined' && 'BroadcastChannel' in window
+      ? new BroadcastChannel('singalong_stage_sync')
+      : null;
+
+  let externalControls: {
+    togglePlay?: () => void;
+    seekToMs?: (ms: number) => void;
+    seekRelative?: (deltaSec: number) => void;
+  } = {};
+
+  function registerExternalControls(controls: typeof externalControls) {
+    externalControls = { ...externalControls, ...controls };
+  }
+
+  function broadcastSync(type: 'tick' | 'full' = 'tick') {
+    if (!stageChannel || isStageWindow) return;
+    try {
+      if (type === 'full') {
+        stageChannel.postMessage({
+          type: 'full',
+          vid: currentVid(),
+          currentTimeMs: currentTimeMs(),
+          totalDurationMs: totalDurationMs(),
+          isPlaying: isPlaying(),
+          playbackRate: playbackRate(),
+          tierMode: tierMode(),
+          activeLineIdx: activeLineIdx(),
+          lines: lines(),
+          metadata: projectData()?.metadata || null,
+          config: projectData()?.config || null,
+        });
+      } else {
+        stageChannel.postMessage({
+          type: 'tick',
+          vid: currentVid(),
+          currentTimeMs: currentTimeMs(),
+          totalDurationMs: totalDurationMs(),
+          isPlaying: isPlaying(),
+          playbackRate: playbackRate(),
+          tierMode: tierMode(),
+          activeLineIdx: activeLineIdx(),
+          metadata: projectData()?.metadata || null,
+        });
+      }
+    } catch {}
+  }
+
+  if (stageChannel) {
+    stageChannel.onmessage = (ev) => {
+      const msg = ev.data;
+      if (!msg || typeof msg !== 'object') return;
+
+      if (isStageWindow) {
+        if (msg.type === 'tick' || msg.type === 'full') {
+          if (msg.vid && msg.vid !== currentVid()) {
+            setCurrentVid(msg.vid);
+            if (msg.type !== 'full') {
+              selectProject(msg.vid);
+            }
+          }
+          if (typeof msg.currentTimeMs === 'number') setCurrentTimeMs(msg.currentTimeMs);
+          if (typeof msg.totalDurationMs === 'number') setTotalDurationMs(msg.totalDurationMs);
+          if (typeof msg.isPlaying === 'boolean') setIsPlaying(msg.isPlaying);
+          if (typeof msg.playbackRate === 'number') setPlaybackRate(msg.playbackRate);
+          if (msg.tierMode) setTierMode(msg.tierMode);
+          if (typeof msg.activeLineIdx === 'number') setActiveLineIdx(msg.activeLineIdx);
+          if (msg.metadata && projectData()) {
+            setProjectData({ ...projectData()!, metadata: msg.metadata });
+          }
+          if (msg.type === 'full' && Array.isArray(msg.lines)) {
+            setLines(msg.lines);
+          }
+        }
+      } else {
+        // Editor window receiving commands from Detached Stage Monitor
+        if (msg.type === 'request_sync') {
+          broadcastSync('full');
+        } else if (msg.type === 'cmd_toggle_play') {
+          externalControls.togglePlay?.();
+        } else if (msg.type === 'cmd_seek_ms' && typeof msg.ms === 'number') {
+          externalControls.seekToMs?.(msg.ms);
+        } else if (msg.type === 'cmd_seek_rel' && typeof msg.deltaSec === 'number') {
+          externalControls.seekRelative?.(msg.deltaSec);
+        } else if (msg.type === 'cmd_tier' && msg.tierMode) {
+          setTierMode(msg.tierMode);
+          updateBgMeta({ tier_mode: msg.tierMode }).catch(() => {});
+        } else if (msg.type === 'cmd_offset' && typeof msg.bg_offset_ms === 'number') {
+          updateBgMeta({ bg_offset_ms: msg.bg_offset_ms }).catch(() => {});
+        } else if (msg.type === 'cmd_dim' && typeof msg.bg_dim_pct === 'number') {
+          updateBgMeta({ bg_dim_pct: msg.bg_dim_pct }).catch(() => {});
+        }
+      }
+    };
+  }
+
+  function sendStageCommand(payload: Record<string, any>) {
+    if (!stageChannel) return;
+    try {
+      stageChannel.postMessage(payload);
+    } catch {}
+  }
+
+  function openStagePopupWindow() {
+    const vid = currentVid();
+    const url = new URL(window.location.href);
+    url.searchParams.set('view', 'stage');
+    if (vid) url.searchParams.set('vid', vid);
+    const popup = window.open(
+      url.toString(),
+      'SingalongStageMonitor',
+      'width=1280,height=720,menubar=no,toolbar=no,location=no,status=no,resizable=yes'
+    );
+    if (popup) {
+      popup.focus();
+      setTimeout(() => broadcastSync('full'), 350);
+      addToast('📺 Opened Detached Video Render Simulator window');
+    } else {
+      addToast('⚠️ Pop-up blocked by browser — please allow pop-ups for this site');
+    }
+  }
+
   // Undo history
   const undoStack: string[] = [];
 
@@ -193,11 +317,16 @@ function createAppStore() {
       else if (savedTier === '2' || savedTier === 'two_tier') setTierMode('2');
       else setTierMode('3');
       setStatusMsg(`Loaded ${vid}`);
-      window.history.replaceState(null, '', `?vid=${encodeURIComponent(vid)}`);
+      if (!isStageWindow) {
+        window.history.replaceState(null, '', `?vid=${encodeURIComponent(vid)}`);
+      }
+      broadcastSync('full');
     } catch (e: any) {
       setStatusMsg(`Project '${vid}' not built yet — opening pipeline modal`);
       setHeaderInputVid(vid);
-      setShowIngestModal(true);
+      if (!isStageWindow) {
+        setShowIngestModal(true);
+      }
     }
   }
 
@@ -213,6 +342,7 @@ function createAppStore() {
         if (res.lint && projectData()) {
           setProjectData({ ...projectData()!, lint: res.lint });
         }
+        broadcastSync('full');
       } else {
         addToast(`Save error: ${res.error}`);
       }
@@ -233,6 +363,7 @@ function createAppStore() {
           ...projectData()!,
           metadata: res.metadata,
         });
+        broadcastSync('tick');
       }
       return res;
     } catch (e: any) {
@@ -244,17 +375,19 @@ function createAppStore() {
 
   function updateActiveLineFromTime(timeMs: number) {
     setCurrentTimeMs(timeMs);
-    if (!followPlayhead() || isTapMode() || !isPlaying()) return;
-    const lns = lines();
-    const curIdx = activeLineIdx();
-    const curLn = lns[curIdx];
-    const inCur = curLn && timeMs >= curLn.start - 200 && timeMs <= curLn.end + 250;
-    if (!inCur) {
-      const matchIdx = lns.findIndex((ln) => timeMs >= ln.start && timeMs <= ln.end);
-      if (matchIdx !== -1 && matchIdx !== curIdx) {
-        selectLine(matchIdx);
+    if (followPlayhead() && !isTapMode() && isPlaying()) {
+      const lns = lines();
+      const curIdx = activeLineIdx();
+      const curLn = lns[curIdx];
+      const inCur = curLn && timeMs >= curLn.start - 200 && timeMs <= curLn.end + 250;
+      if (!inCur) {
+        const matchIdx = lns.findIndex((ln) => timeMs >= ln.start && timeMs <= ln.end);
+        if (matchIdx !== -1 && matchIdx !== curIdx) {
+          selectLine(matchIdx);
+        }
       }
     }
+    broadcastSync('tick');
   }
 
   function toggleTokenDeleted(lineIdx: number, tokenIdx: number) {
@@ -675,6 +808,11 @@ function createAppStore() {
     updateTokenTimes,
     shiftTokens,
     adjustTokenDuration,
+    isStageWindow,
+    registerExternalControls,
+    broadcastSync,
+    sendStageCommand,
+    openStagePopupWindow,
   };
 }
 

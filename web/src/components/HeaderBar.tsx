@@ -218,6 +218,14 @@ export const HeaderBar: Component<{ onSelectAndSeekLine?: (idx: number) => void 
         <div class="header-right">
           <button
             class="btn"
+            onClick={() => store.openStagePopupWindow()}
+            title="Open 1920x1080 16:9 Final Video Render Simulator in a separate window"
+          >
+            📺 Video Monitor
+          </button>
+
+          <button
+            class="btn"
             onClick={() => store.setShowVideoBgModal(true)}
             title="Set or adjust background video or image overlay"
           >
