@@ -11,7 +11,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from core.phonetics import tokenize_text, has_kana, is_hangul
+from core.phonetics import tokenize_text, has_kana, is_hangul, is_han
 
 
 def build_tokens(text: str, stamps: list, lang: str | None = None) -> list[dict]:
@@ -226,19 +226,49 @@ def transcribe_sensevoice(wav: Path, device: str, lang: str | None = None) -> tu
     return text, stamps
 
 
-def resolve_asr_engine(engine: str | None, lang: str | None, workdir: Path, vid: str) -> str:
+def resolve_asr_engine(
+    engine: str | None,
+    lang: str | None,
+    workdir: Path,
+    vid: str,
+    wav: Path | None = None,
+    lyrics_text: str | None = None,
+) -> str:
     eng = (engine or "auto").lower().strip()
     if eng in ("paraformer", "whisper", "sensevoice"):
         return eng
 
-    # Auto routing based on target language or metadata hints
+    # Auto routing based on target language
     norm_lang = (lang or "auto").lower().strip()
     if norm_lang == "zh":
         return "paraformer"
     if norm_lang in ("en", "ja", "ko"):
         return "whisper"
 
-    # Check project metadata title for explicit language tags or Kana/Hangul
+    # 1. Inspect target lyrics script distribution if available or cached
+    if not lyrics_text:
+        for cand_name in (f"{vid}.lrc", f"{vid}.netease.lrc", f"{vid}.txt"):
+            p = workdir / cand_name
+            if p.exists():
+                try:
+                    lyrics_text = p.read_text(encoding="utf-8")
+                    break
+                except Exception:
+                    pass
+
+    if lyrics_text:
+        try:
+            from core.lyrics import detect_script_distribution
+            script = detect_script_distribution(lyrics_text)
+            dom = script.get("dominant")
+            if dom in ("en", "ja", "ko") or script.get("latin_ratio", 0) > 0.45 or script.get("kana_ratio", 0) > 0.08 or script.get("hangul_ratio", 0) > 0.08:
+                return "whisper"
+            if dom == "zh" or script.get("han_ratio", 0) > 0.45:
+                return "paraformer"
+        except Exception:
+            pass
+
+    # 2. Check project metadata title for explicit language tags or Kana/Hangul
     meta_path = workdir / f"{vid}.meta.json"
     if meta_path.exists():
         try:
@@ -247,6 +277,9 @@ def resolve_asr_engine(engine: str | None, lang: str | None, workdir: Path, vid:
             if has_kana(title) or any(is_hangul(ch) for ch in title):
                 return "whisper"
             if re.search(r"\b(en|eng|english|jp|jpn|japanese|kr|kor|korean)\s*(ver|version)?\b", title, re.I):
+                return "whisper"
+            latin_words = [w for w in re.findall(r"[a-zA-Z]+", title) if len(w) > 1]
+            if len(latin_words) >= 3 and not any(is_han(ch) for ch in title):
                 return "whisper"
         except Exception:
             pass
@@ -263,7 +296,7 @@ def transcribe(
     lang: str | None = None,
     force_asr: bool = False,
 ) -> tuple[str, list[list[int]]]:
-    resolved_engine = resolve_asr_engine(engine, lang, workdir, vid)
+    resolved_engine = resolve_asr_engine(engine, lang, workdir, vid, wav=wav)
 
     engine_cache = workdir / f"{vid}.asr.{resolved_engine}.json"
     para_cache = workdir / f"{vid}.asr.paraformer.json"

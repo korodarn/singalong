@@ -227,3 +227,33 @@ export function subscribeRenderSSE(
   };
   return () => es.close();
 }
+
+export async function realignLine(
+  vid: string,
+  lineIdx: number,
+  options?: { ignore_lrc_end_cap?: boolean; snap_to_islands?: boolean }
+): Promise<{ ok: boolean; line: any; lint: any }> {
+  const res = await fetch(`/api/project/${encodeURIComponent(vid)}/realign-line`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ line_idx: lineIdx, options }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to realign line');
+  }
+  return res.json();
+}
+
+export async function purgeWork(
+  vid?: string,
+  keepMedia: boolean = false
+): Promise<{ ok: boolean; deleted: string[]; count: number }> {
+  const res = await fetch('/api/work/purge', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ vid, keep_media: keepMedia }),
+  });
+  if (!res.ok) throw new Error('Failed to purge work directory');
+  return res.json();
+}

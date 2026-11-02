@@ -12,6 +12,7 @@ import { RenderModal } from './components/RenderModal';
 import { VideoBgModal } from './components/VideoBgModal';
 import { VisualizerModal } from './components/VisualizerModal';
 import { DetachedStageWindow } from './components/DetachedStageWindow';
+import { DiagnosticsWindow } from './components/DiagnosticsWindow';
 import './style.css';
 
 const App: Component = () => {
@@ -28,13 +29,23 @@ const App: Component = () => {
       await store.selectProject(target);
     } else if (list.length > 0) {
       await store.selectProject(list[0].id);
-    } else if (!store.isStageWindow) {
+    } else if (!store.isStageWindow && !store.isDiagnosticsWindow) {
       store.setShowIngestModal(true);
     }
   });
 
   if (store.isStageWindow) {
     return <DetachedStageWindow />;
+  }
+
+  if (store.isDiagnosticsWindow) {
+    return (
+      <DiagnosticsWindow
+        isDetached={true}
+        onSeekTo={(ms) => store.sendStageCommand({ type: 'cmd_seek_ms', ms })}
+        onPlayBounds={(start, end) => store.sendStageCommand({ type: 'cmd_seek_ms', ms: start })}
+      />
+    );
   }
 
   const handleSeek = (ms: number) => {
@@ -65,6 +76,15 @@ const App: Component = () => {
       <RenderModal />
       <VideoBgModal />
       <VisualizerModal />
+
+      <Show when={store.showDiagnosticsModal()}>
+        <DiagnosticsWindow
+          isDetached={false}
+          onClose={() => store.setShowDiagnosticsModal(false)}
+          onSeekTo={handleSeek}
+          onPlayBounds={handlePlayBounds}
+        />
+      </Show>
 
       {/* Toast Notifications */}
       <div class="toast-container">

@@ -1,3 +1,36 @@
+export interface DiagnosticFlag {
+  code: string;
+  severity: 'info' | 'warning' | 'error';
+  detail: string;
+}
+
+export interface TokenDiagnostics {
+  source?: 'mms_fa' | 'asr' | 'dp_boundary' | 'char_weight' | 'interpolated';
+  ctc_score?: number;
+  rms_db?: number;
+  onset_strength?: number;
+  sustain_extended_ms?: number;
+  flags?: DiagnosticFlag[];
+}
+
+export interface LineDiagnostics {
+  line_idx?: number;
+  lrc_nominal_start?: number;
+  lrc_nominal_end?: number;
+  shift_from_lrc_start_ms?: number;
+  shift_from_lrc_end_ms?: number;
+  alignment_method?: 'mms_fa_ctc' | 'asr_anchored' | 'island_weighted' | 'uniform_fallback';
+  phonetic_match_score?: number;
+  mean_ctc_score?: number;
+  mean_rms_db?: number;
+  lead_in_breath_trimmed_ms?: number;
+  tail_sustain_extended_ms?: number;
+  voiced_islands?: [number, number][];
+  asr_heard_text?: string;
+  asr_raw_tokens?: { text: string; start: number; end: number }[];
+  flags?: DiagnosticFlag[];
+}
+
 export interface Token {
   text: string;
   start: number;
@@ -7,6 +40,7 @@ export interface Token {
   pinyin?: string;
   en?: string;
   comment?: string;
+  diag?: TokenDiagnostics;
 }
 
 export interface Line {
@@ -14,6 +48,7 @@ export interface Line {
   end: number;
   is_backing?: boolean;
   tokens: Token[];
+  diag?: LineDiagnostics;
 }
 
 export interface ProjectSummary {

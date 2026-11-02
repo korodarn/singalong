@@ -76,10 +76,12 @@ function createAppStore() {
   const [showVideoBgModal, setShowVideoBgModal] = createSignal<boolean>(false);
   const [showVisualizerModal, setShowVisualizerModal] = createSignal<boolean>(false);
   const [showCommentModal, setShowCommentModal] = createSignal<boolean>(false);
+  const [showDiagnosticsModal, setShowDiagnosticsModal] = createSignal<boolean>(false);
   const [editingToken, setEditingToken] = createSignal<{ lineIdx: number; tokenIdx: number; token: Token } | null>(null);
 
-  // Cross-window BroadcastChannel for Detached Stage Monitor
+  // Cross-window BroadcastChannel for Detached Stage Monitor & Diagnostics
   const isStageWindow = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('view') === 'stage';
+  const isDiagnosticsWindow = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('view') === 'diagnostics';
   const stageChannel: BroadcastChannel | null =
     typeof window !== 'undefined' && 'BroadcastChannel' in window
       ? new BroadcastChannel('singalong_stage_sync')
@@ -96,7 +98,7 @@ function createAppStore() {
   }
 
   function broadcastSync(type: 'tick' | 'full' = 'tick') {
-    if (!stageChannel || isStageWindow) return;
+    if (!stageChannel || isStageWindow || isDiagnosticsWindow) return;
     try {
       if (type === 'full') {
         stageChannel.postMessage({
@@ -111,6 +113,7 @@ function createAppStore() {
           lines: lines(),
           metadata: projectData()?.metadata || null,
           config: projectData()?.config || null,
+          lint: projectData()?.lint || null,
         });
       } else {
         // Ticks are for high-frequency playback sync ONLY — DO NOT send metadata!
@@ -127,12 +130,20 @@ function createAppStore() {
     } catch {}
   }
 
+  function openDiagnosticsPopupWindow() {
+    const vid = currentVid();
+    const url = `/?view=diagnostics&vid=${encodeURIComponent(vid)}`;
+    const pop = window.open(url, 'SingalongDiagnostics', 'width=1320,height=880,resizable=yes,scrollbars=yes');
+    if (pop) pop.focus();
+    broadcastSync('full');
+  }
+
   if (stageChannel) {
     stageChannel.onmessage = (ev) => {
       const msg = ev.data;
       if (!msg || typeof msg !== 'object') return;
 
-      if (isStageWindow) {
+      if (isStageWindow || isDiagnosticsWindow) {
         if (msg.type === 'tick' || msg.type === 'full') {
           if (msg.vid && msg.vid !== currentVid()) {
             setCurrentVid(msg.vid);
@@ -147,8 +158,12 @@ function createAppStore() {
           if (msg.tierMode) setTierMode(msg.tierMode);
           if (typeof msg.activeLineIdx === 'number') setActiveLineIdx(msg.activeLineIdx);
           if (msg.type === 'full') {
-            if (msg.metadata && projectData()) {
-              setProjectData({ ...projectData()!, metadata: msg.metadata });
+            if (projectData()) {
+              setProjectData({
+                ...projectData()!,
+                metadata: msg.metadata || projectData()!.metadata,
+                lint: msg.lint || projectData()!.lint,
+              });
             }
             if (Array.isArray(msg.lines)) {
               setLines(msg.lines);
@@ -878,6 +893,10 @@ function createAppStore() {
     shiftTokens,
     adjustTokenDuration,
     isStageWindow,
+    isDiagnosticsWindow,
+    showDiagnosticsModal,
+    setShowDiagnosticsModal,
+    openDiagnosticsPopupWindow,
     registerExternalControls,
     broadcastSync,
     sendStageCommand,

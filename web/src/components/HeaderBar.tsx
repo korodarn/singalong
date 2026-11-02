@@ -218,6 +218,18 @@ export const HeaderBar: Component<{ onSelectAndSeekLine?: (idx: number) => void 
         <div class="header-right">
           <button
             class="btn"
+            style={{
+              'border-color': totalIssues() > 0 ? 'rgba(239, 68, 68, 0.5)' : undefined,
+              background: totalIssues() > 0 ? 'rgba(239, 68, 68, 0.1)' : undefined,
+            }}
+            onClick={() => store.setShowDiagnosticsModal(true)}
+            title="Open Acoustic Alignment Diagnostics Inspector (🔬)"
+          >
+            🔬 Diagnostics {totalIssues() > 0 ? `(${totalIssues()})` : ''}
+          </button>
+
+          <button
+            class="btn"
             onClick={() => store.openStagePopupWindow()}
             title="Open 1920x1080 16:9 Final Video Render Simulator in a separate window"
           >

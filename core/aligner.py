@@ -11,7 +11,11 @@ import numpy as np
 from pypinyin import lazy_pinyin
 from rapidfuzz import fuzz
 import soundfile as sf
+import torch
+import torchaudio
+import torchaudio.functional as taf
 
+from core.models import LineDiagnostics, TokenDiagnostics, DiagnosticFlag
 from core.phonetics import (
     add_phonetics,
     apply_korean_phonology,
@@ -27,20 +31,37 @@ from core.phonetics.ja import SUNG_KANJI_OVERRIDES, _get_kakasi, respell_hira_to
 
 
 class VocalAnalyzer:
-    """10ms-resolution vocal RMS (dBFS) and spectral onset strength curve."""
+    """10ms-resolution vocal RMS (dBFS), spectral flatness (breath vs voice), and onset curve."""
 
     def __init__(self, wav_path: Path | None, frame_ms: int = 10):
         self.frame_ms = frame_ms
+        self.wav_path: Path | None = wav_path
         self.rms_db: np.ndarray | None = None
         self.onset: np.ndarray | None = None
+        self.spectral_flatness: np.ndarray | None = None
+        self.data_16k: np.ndarray | None = None
+
         if wav_path and wav_path.exists():
             data, sr = sf.read(str(wav_path), dtype="float32")
             if data.ndim > 1:
                 data = np.mean(data, axis=1)
+
+            if sr != 16000:
+                self.data_16k = librosa.resample(data, orig_sr=sr, target_sr=16000)
+            else:
+                self.data_16k = data
+
             hop = max(1, int(sr * frame_ms / 1000))
             win = hop * 2
             rms = librosa.feature.rms(y=data, frame_length=win, hop_length=hop, center=True)[0]
             self.rms_db = 20.0 * np.log10(np.maximum(rms, 1e-6))
+
+            flatness_raw = librosa.feature.spectral_flatness(y=data, hop_length=hop, n_fft=win)[0]
+            if len(flatness_raw) < len(self.rms_db):
+                flatness_raw = np.pad(flatness_raw, (0, len(self.rms_db) - len(flatness_raw)))
+            else:
+                flatness_raw = flatness_raw[:len(self.rms_db)]
+            self.spectral_flatness = flatness_raw
 
             onset_raw = librosa.onset.onset_strength(y=data, sr=sr, hop_length=hop, center=True)
             if len(onset_raw) < len(self.rms_db):
@@ -49,6 +70,89 @@ class VocalAnalyzer:
                 onset_raw = onset_raw[:len(self.rms_db)]
             p95 = float(np.percentile(onset_raw, 95)) if len(onset_raw) else 1.0
             self.onset = np.clip(onset_raw / max(p95, 1e-4), 0.0, 2.0)
+
+    def is_breath(self, start_ms: int, end_ms: int) -> bool:
+        """Return True if slice [start_ms, end_ms] represents an unvoiced breath intake rather than voiced singing."""
+        if self.rms_db is None or self.spectral_flatness is None or end_ms <= start_ms:
+            return False
+        s = self._idx(start_ms)
+        e = max(s + 1, self._idx(end_ms))
+        sub_rms = self.rms_db[s:e]
+        sub_flat = self.spectral_flatness[s:e]
+        mean_db = float(np.mean(sub_rms))
+        mean_flat = float(np.mean(sub_flat))
+        return -40.0 <= mean_db <= -22.0 and mean_flat > 0.38
+
+    def find_voiced_attack(self, start_ms: int, search_window_ms: int = 700) -> tuple[int, int]:
+        """
+        Search forward from nominal start_ms for the first voiced (non-breath) attack,
+        skipping leading breath intakes. Returns (adjusted_start_ms, trimmed_breath_ms).
+        """
+        if self.rms_db is None or self.spectral_flatness is None:
+            return start_ms, 0
+        s = self._idx(start_ms)
+        max_idx = min(len(self.rms_db), s + int(search_window_ms / self.frame_ms))
+        for idx in range(s, max_idx):
+            db = self.rms_db[idx]
+            flat = self.spectral_flatness[idx]
+            if db >= -34.0 and flat < 0.35:
+                w_s = max(0, idx - 2)
+                w_e = min(len(self.onset), idx + 5) if self.onset is not None else idx + 1
+                peak_offset = int(np.argmax(self.onset[w_s:w_e])) if self.onset is not None and w_e > w_s else 0
+                best_idx = w_s + peak_offset
+                adj_ms = int(best_idx * self.frame_ms)
+                trimmed = max(0, adj_ms - start_ms)
+                return adj_ms, trimmed
+        return start_ms, 0
+
+    def find_elastic_inter_line_boundary(
+        self,
+        nom_boundary_ms: int,
+        search_back_ms: int = 1200,
+        search_fwd_ms: int = 2800,
+    ) -> tuple[int, dict]:
+        """
+        Negotiate an elastic boundary between adjacent lines, sliding past held sustained vowels
+        and snapping into the acoustic breath/silence trough right before the next phrase onset.
+        """
+        if self.rms_db is None:
+            return nom_boundary_ms, {"shift_ms": 0, "reason": "no_audio"}
+        s_ms = max(0, nom_boundary_ms - search_back_ms)
+        e_ms = min(len(self.rms_db) * self.frame_ms, nom_boundary_ms + search_fwd_ms)
+        s_idx = self._idx(s_ms)
+        e_idx = max(s_idx + 1, self._idx(e_ms))
+
+        best_cost = 1e9
+        best_t = nom_boundary_ms
+        best_idx = self._idx(nom_boundary_ms)
+
+        for idx in range(s_idx, e_idx):
+            t_ms = idx * self.frame_ms
+            rms = self.rms_db[idx]
+            flat = self.spectral_flatness[idx] if self.spectral_flatness is not None else 0.2
+            next_ons = float(np.max(self.onset[idx:min(len(self.onset), idx + 4)])) if self.onset is not None else 0.0
+
+            # Energy cost: high RMS means singing vowel, should not cut here
+            w_energy = 1.0 * (rms + 25.0) / 10.0
+            # Flatness bonus: high spectral flatness means breath intake / unvoiced trough
+            w_flat = -0.8 * flat
+            # Onset bonus: right before next consonant attack
+            w_onset = -1.2 * next_ons
+            # Prior penalty keeps boundary reasonable
+            w_prior = 0.5 * ((t_ms - nom_boundary_ms) / 2000.0) ** 2
+
+            cost = w_energy + w_flat + w_onset + w_prior
+            if cost < best_cost:
+                best_cost = cost
+                best_t = t_ms
+                best_idx = idx
+
+        shift = best_t - nom_boundary_ms
+        return best_t, {
+            "shift_ms": shift,
+            "cost": float(best_cost),
+            "rms_at_boundary": float(self.rms_db[best_idx]),
+        }
 
     def _idx(self, ms: int) -> int:
         if self.rms_db is None:
@@ -661,12 +765,287 @@ def enforce_non_overlapping_lines(lines: list[dict]):
                         t["end"] = t["start"] + 65
                 cur_ln["start"] = cur_ln["tokens"][0]["start"]
                 cur_ln["end"] = cur_ln["tokens"][-1]["end"]
+                if "diag" in cur_ln:
+                    orig_s = cur_ln["diag"].get("lrc_nominal_start")
+                    orig_e = cur_ln["diag"].get("lrc_nominal_end")
+                    if orig_s is not None:
+                        cur_ln["diag"]["shift_from_lrc_start_ms"] = cur_ln["start"] - orig_s
+                    if orig_e is not None:
+                        cur_ln["diag"]["shift_from_lrc_end_ms"] = cur_ln["end"] - orig_e
+
+
+_MMS_MODEL = None
+_MMS_DICT = None
+
+
+def get_mms_aligner(device: str = "cpu"):
+    global _MMS_MODEL, _MMS_DICT
+    if _MMS_MODEL is None:
+        try:
+            bundle = torchaudio.pipelines.MMS_FA
+            _MMS_DICT = bundle.get_dict()
+            model = bundle.get_model()
+            model.eval()
+            _MMS_MODEL = model.to(device)
+        except Exception as e:
+            print(f"  [!] Failed to load MMS_FA model: {e}")
+            return None, None
+    return _MMS_MODEL, _MMS_DICT
+
+
+def forced_align_with_mms(
+    words: list[dict],
+    span_s: int,
+    span_e: int,
+    analyzer: VocalAnalyzer,
+    is_ja: bool = False,
+    device: str = "cpu",
+) -> list[dict] | None:
+    if not words or analyzer.data_16k is None or span_e <= span_s:
+        return None
+
+    model, dictionary = get_mms_aligner(device=device)
+    if model is None or dictionary is None:
+        return None
+
+    word_tokens: list[list[int]] = []
+    for w in words:
+        txt = w.get("text", "")
+        phon = _token_phonetic_str(txt, is_ja=is_ja).lower()
+        t_ids = [dictionary[ch] for ch in phon if ch in dictionary]
+        if not t_ids:
+            clean_ascii = re.sub(r"[^a-z']", "", txt.lower())
+            t_ids = [dictionary[ch] for ch in clean_ascii if ch in dictionary]
+        if not t_ids:
+            t_ids = [dictionary.get("a", 1)]
+        word_tokens.append(t_ids)
+
+    flat_tokens: list[int] = []
+    word_ranges: list[tuple[int, int]] = []
+    curr = 0
+    for w_ids in word_tokens:
+        flat_tokens.extend(w_ids)
+        word_ranges.append((curr, curr + len(w_ids)))
+        curr += len(w_ids)
+
+    if not flat_tokens:
+        return None
+
+    buf_s_ms = max(0, span_s - 150)
+    buf_e_ms = min(len(analyzer.data_16k) * 1000 // 16000, span_e + 200)
+    sample_s = int(buf_s_ms * 16)
+    sample_e = int(buf_e_ms * 16)
+    audio_slice = analyzer.data_16k[sample_s:sample_e]
+
+    min_samples = max(len(flat_tokens) * 2 * 320, 1600)
+    if len(audio_slice) < min_samples:
+        return None
+
+    wav_t = torch.from_numpy(audio_slice).unsqueeze(0).to(device)
+
+    try:
+        with torch.inference_mode():
+            emission, _ = model(wav_t)
+            targets = torch.tensor([flat_tokens], dtype=torch.int32, device=device)
+            input_lengths = torch.tensor([emission.size(1)], dtype=torch.int32, device=device)
+            target_lengths = torch.tensor([len(flat_tokens)], dtype=torch.int32, device=device)
+
+            aligned_tokens, scores = taf.forced_align(
+                emission, targets, input_lengths, target_lengths
+            )
+            spans = taf.merge_tokens(aligned_tokens[0], scores[0])
+    except Exception:
+        return None
+
+    if len(spans) != len(flat_tokens):
+        return None
+
+    num_frames = emission.size(1)
+    num_samples = len(audio_slice)
+    samples_per_frame = num_samples / num_frames
+
+    def frame_to_ms(f: int) -> int:
+        return buf_s_ms + int(round(f * samples_per_frame / 16.0))
+
+    out_tokens: list[dict] = []
+    m = len(words)
+
+    for idx, w in enumerate(words):
+        w_s_char, w_e_char = word_ranges[idx]
+        w_spans = spans[w_s_char:w_e_char]
+
+        w_start_ms = frame_to_ms(w_spans[0].start)
+        w_end_ms = frame_to_ms(w_spans[-1].end)
+        mean_ctc_log = float(np.mean([s.score for s in w_spans]))
+        ctc_prob = float(np.exp(mean_ctc_log))
+
+        if analyzer.onset is not None:
+            f_ms = analyzer._idx(w_start_ms)
+            w_lo = max(0, f_ms - 2)
+            w_hi = min(len(analyzer.onset), f_ms + 4)
+            if w_hi > w_lo:
+                best_peak_idx = w_lo + int(np.argmax(analyzer.onset[w_lo:w_hi]))
+                if analyzer.onset[best_peak_idx] > 0.35:
+                    w_start_ms = best_peak_idx * analyzer.frame_ms
+
+        if out_tokens and w_start_ms < out_tokens[-1]["end"] + 10:
+            w_start_ms = out_tokens[-1]["end"] + 10
+
+        if w_end_ms <= w_start_ms + 60:
+            w_end_ms = w_start_ms + 75
+
+        # Blank-Frame Acoustic Vowel Tail Extension
+        next_nominal_s = frame_to_ms(spans[word_ranges[idx + 1][0]].start) if idx + 1 < m else span_e + 100
+        ceiling_ms = min(next_nominal_s - 25, w_start_ms + 5000)
+
+        orig_end = w_end_ms
+        sustain_ext = 0
+        if w_end_ms < ceiling_ms:
+            curr_e = w_end_ms
+            while curr_e + 40 <= ceiling_ms:
+                slice_db = analyzer.mean_db(curr_e, curr_e + 40)
+                if slice_db >= -34.0:
+                    curr_e += 40
+                else:
+                    break
+            if curr_e > orig_end:
+                sustain_ext = curr_e - orig_end
+                w_end_ms = curr_e
+
+        tok_rms = analyzer.mean_db(w_start_ms, w_end_ms)
+        ons_val = float(analyzer.onset[analyzer._idx(w_start_ms)]) if analyzer.onset is not None else 1.0
+
+        flags = []
+        if ctc_prob < 0.25:
+            flags.append({
+                "code": "LOW_CTC_SCORE",
+                "severity": "warning",
+                "detail": f"Low CTC forced-alignment confidence ({ctc_prob:.2f})",
+            })
+        if tok_rms < -42.0:
+            flags.append({
+                "code": "LOW_RMS_SILENCE",
+                "severity": "warning",
+                "detail": f"Token sits in low vocal energy ({tok_rms:.1f} dBFS)",
+            })
+
+        out_tokens.append({
+            "text": w.get("text", ""),
+            "start": int(w_start_ms),
+            "end": int(w_end_ms),
+            "space": w.get("space", False),
+            "comment": w.get("comment", ""),
+            "diag": {
+                "source": "mms_fa",
+                "ctc_score": round(ctc_prob, 3),
+                "rms_db": round(tok_rms, 1),
+                "onset_strength": round(ons_val, 2),
+                "sustain_extended_ms": sustain_ext,
+                "flags": flags,
+            },
+        })
+
+    return out_tokens
+
+
+def estimate_global_lrc_drift(
+    lrc_lines: list[dict],
+    tokens: list[dict],
+    is_ja: bool = False,
+    max_search_dist_ms: int = 15000,
+) -> tuple[float, float, list[dict]]:
+    """
+    Fit a robust offset model Δt(t) = slope * t + intercept using RANSAC
+    across high-confidence phonetic matches between LRC lines and ASR tokens.
+    Returns (slope, intercept, matched_anchors).
+    """
+    if not lrc_lines or not tokens:
+        return 0.0, 0.0, []
+
+    anchors = []
+    for ln in lrc_lines:
+        nom_s = ln.get("start", 0)
+        txt = ln.get("text", "")
+        if not txt.strip():
+            continue
+        c_chars = tokenize_text(txt, lang="ja" if is_ja else None)
+        c_py = "".join(_token_phonetic_str(ch, is_ja=is_ja) for ch in c_chars)
+        if not c_py:
+            continue
+
+        cands = [t for t in tokens if nom_s - max_search_dist_ms <= t["start"] <= nom_s + max_search_dist_ms]
+        if not cands:
+            continue
+
+        best_sub = None
+        best_r = -1.0
+        for span_len in range(max(1, len(c_chars) - 2), min(len(cands) + 1, len(c_chars) + 3)):
+            for k in range(len(cands) - span_len + 1):
+                sub = cands[k:k + span_len]
+                sub_py = "".join(_token_phonetic_str(t["text"], is_ja=is_ja) for t in sub)
+                if not sub_py:
+                    continue
+                r = fuzz.ratio(c_py, sub_py)
+                if r > best_r:
+                    best_r = r
+                    best_sub = sub
+
+        if best_sub and best_r >= 72.0:
+            anchors.append({
+                "lrc_start": nom_s,
+                "asr_start": best_sub[0]["start"],
+                "offset": best_sub[0]["start"] - nom_s,
+                "score": best_r,
+            })
+
+    if len(anchors) < 3:
+        if len(anchors) >= 1:
+            med_off = float(np.median([a["offset"] for a in anchors]))
+            if abs(med_off) >= 120:
+                return 0.0, med_off, anchors
+        return 0.0, 0.0, anchors
+
+    offsets = np.array([a["offset"] for a in anchors], dtype=np.float64)
+    lrc_times = np.array([a["lrc_start"] for a in anchors], dtype=np.float64)
+
+    best_inliers = []
+    best_intercept = float(np.median(offsets))
+    best_slope = 0.0
+
+    med_off = float(np.median(offsets))
+    const_inliers = [a for a in anchors if abs(a["offset"] - med_off) <= 350]
+    if len(const_inliers) > len(best_inliers):
+        best_inliers = const_inliers
+        best_intercept = med_off
+        best_slope = 0.0
+
+    rng = np.random.RandomState(42)
+    n_pts = len(anchors)
+    for _ in range(min(50, n_pts * (n_pts - 1) // 2)):
+        i, j = rng.choice(n_pts, 2, replace=False)
+        dt = lrc_times[j] - lrc_times[i]
+        if abs(dt) < 15000:
+            continue
+        slope = (offsets[j] - offsets[i]) / dt
+        if abs(slope) > 0.02:
+            continue
+        intercept = offsets[i] - slope * lrc_times[i]
+        pred_offsets = slope * lrc_times + intercept
+        inliers = [a for idx, a in enumerate(anchors) if abs(offsets[idx] - pred_offsets[idx]) <= 320]
+        if len(inliers) > len(best_inliers):
+            best_inliers = inliers
+            best_slope = float(slope)
+            best_intercept = float(intercept)
+
+    if len(best_inliers) >= max(2, int(0.4 * len(anchors))) and abs(best_intercept) >= 120:
+        return best_slope, best_intercept, best_inliers
+    return 0.0, 0.0, anchors
 
 
 def align_lrc_with_tokens(lrc_lines, tokens, analyzer: VocalAnalyzer | None = None):
     """
-    Marry synchronized lines with FunASR acoustic tokens and vocal energy.
-    Uses phonetic sliding-window anchor matching to resolve drifted timestamps.
+    Marry synchronized lines with FunASR/Whisper acoustic tokens, Meta MMS-FA forced alignment,
+    and vocal energy telemetry. Uses elastic inter-line boundary negotiation and RANSAC drift correction.
     """
     if not lrc_lines:
         return []
@@ -680,19 +1059,34 @@ def align_lrc_with_tokens(lrc_lines, tokens, analyzer: VocalAnalyzer | None = No
         if "pinyin" not in t:
             t["pinyin"] = lazy_pinyin(t["text"])[0] if t["text"].strip() else ""
 
-    windows = []
-    i = 0
-    while i < len(lrc_lines):
-        cur_start = lrc_lines[i]["start"]
-        j = i + 1
-        while j < len(lrc_lines) and lrc_lines[j]["start"] == cur_start:
-            j += 1
-        windows.append(lrc_lines[i:j])
-        i = j
-
     is_ja_song = any(has_kana(it.get("text", "")) for it in lrc_lines) or any(
         has_kana(t.get("text", "")) for t in valid_tokens
     )
+
+    # 1. Global & Piecewise Linear Drift Correction (RANSAC)
+    slope, intercept, drift_inliers = estimate_global_lrc_drift(lrc_lines, valid_tokens, is_ja=is_ja_song)
+    if slope != 0.0 or abs(intercept) >= 120:
+        print(f"  [*] Global LRC Drift corrected (slope={slope:.4f}, offset={intercept:+.0f}ms, inliers={len(drift_inliers)}/{len(lrc_lines)})")
+
+    processed_lrc = []
+    for it in lrc_lines:
+        orig_s = it["start"]
+        shifted_s = max(0, int(round(orig_s + slope * orig_s + intercept))) if (slope != 0.0 or abs(intercept) >= 120) else orig_s
+        item_copy = dict(it)
+        item_copy["_orig_start"] = orig_s
+        item_copy["start"] = shifted_s
+        processed_lrc.append(item_copy)
+
+    # 2. Group into simultaneous / overlapping windows
+    windows = []
+    i = 0
+    while i < len(processed_lrc):
+        cur_start = processed_lrc[i]["start"]
+        j = i + 1
+        while j < len(processed_lrc) and processed_lrc[j]["start"] == cur_start:
+            j += 1
+        windows.append(processed_lrc[i:j])
+        i = j
 
     anchors = []
     for w_idx, win in enumerate(windows):
@@ -702,7 +1096,7 @@ def align_lrc_with_tokens(lrc_lines, tokens, analyzer: VocalAnalyzer | None = No
         nom_s = win[0]["start"]
 
         compat_tokens = _filter_script_compatible_tokens(combined_text, valid_tokens)
-        cands = [t for t in compat_tokens if nom_s - 1500 <= t["start"] <= nom_s + 2200]
+        cands = [t for t in compat_tokens if nom_s - 2500 <= t["start"] <= nom_s + 3500]
         best_sub = None
         best_r = -1.0
         if c_chars and cands:
@@ -751,52 +1145,134 @@ def align_lrc_with_tokens(lrc_lines, tokens, analyzer: VocalAnalyzer | None = No
         win_tokens[best_w].append(tok)
 
     out_lines = []
+    line_idx_counter = 0
+
     for w_idx, win in enumerate(windows):
         toks = win_tokens[w_idx]
         anc_s = anchors[w_idx]["start"]
-        next_start = anchors[w_idx + 1]["start"] if w_idx + 1 < len(windows) else anc_s + 6000
+        next_nominal = windows[w_idx + 1][0]["start"] if w_idx + 1 < len(windows) else None
 
-        if len(win) == 1:
-            item = win[0]
-            tok_list = align_line_with_clauses(item["text"], toks, anc_s, next_start, analyzer)
-            if tok_list:
-                out_lines.append({
-                    "start": tok_list[0]["start"],
-                    "end": tok_list[-1]["end"],
-                    "is_backing": item.get("is_backing", False),
-                    "tokens": tok_list,
-                })
+        # Negotiate elastic inter-line boundary
+        if next_nominal is not None:
+            elastic_end, b_diag = analyzer.find_elastic_inter_line_boundary(next_nominal)
         else:
-            char_counts = [len(tokenize_text(it["text"])) for it in win]
-            total_chars = max(1, sum(char_counts))
+            elastic_end = anc_s + 6000
+            b_diag = {"shift_ms": 0}
 
-            tok_offset = 0
-            time_offset = anc_s
-            window_duration = next_start - time_offset
+        for item_idx, item in enumerate(win):
+            line_text = item["text"]
+            orig_lrc_s = item.get("_orig_start", item["start"])
+            norm_chars = tokenize_tokens(line_text)
+            if not norm_chars:
+                continue
 
-            for it_idx, item in enumerate(win):
-                c_cnt = char_counts[it_idx]
-                frac = c_cnt / total_chars
+            # Leading breath rejection
+            adj_s, lead_breath_trimmed = analyzer.find_voiced_attack(anc_s)
 
-                if it_idx == len(win) - 1:
-                    sub_toks = toks[tok_offset:]
-                else:
-                    take_count = round(len(toks) * frac)
-                    sub_toks = toks[tok_offset:tok_offset + take_count]
-                    tok_offset += take_count
+            # Attempt MMS-FA Forced Alignment
+            mms_toks = forced_align_with_mms(
+                norm_chars,
+                adj_s,
+                elastic_end,
+                analyzer,
+                is_ja=is_ja_song,
+                device="cuda" if torch.cuda.is_available() else "cpu",
+            )
 
-                sub_start = int(time_offset)
-                sub_end = int(time_offset + window_duration * frac)
-                time_offset = sub_end
+            tok_list = None
+            align_method = "uniform_fallback"
 
-                tok_list = align_line_with_clauses(item["text"], sub_toks, sub_start, sub_end, analyzer)
+            if mms_toks and len(mms_toks) == len(norm_chars):
+                mean_ctc = float(np.mean([t["diag"]["ctc_score"] for t in mms_toks]))
+                if mean_ctc >= 0.28:
+                    tok_list = mms_toks
+                    align_method = "mms_fa_ctc"
+
+            if not tok_list:
+                # Fallback to ASR-anchored island alignment
+                tok_list = align_line_with_clauses(line_text, toks, adj_s, elastic_end, analyzer)
                 if tok_list:
-                    out_lines.append({
-                        "start": tok_list[0]["start"],
-                        "end": tok_list[-1]["end"],
-                        "is_backing": item.get("is_backing", False),
-                        "tokens": tok_list,
-                    })
+                    c_py = "".join(_token_phonetic_str(c["text"], is_ja=is_ja_song) for c in norm_chars)
+                    t_py = "".join(_token_phonetic_str(t["text"], is_ja=is_ja_song) for t in toks)
+                    asr_matched = bool(c_py and t_py and fuzz.ratio(c_py, t_py) >= 65.0)
+                    align_method = "asr_anchored" if asr_matched else "island_weighted"
+                    # Populate token diag for fallback tokens
+                    for t in tok_list:
+                        if "diag" not in t:
+                            t_rms = analyzer.mean_db(t["start"], t["end"])
+                            t_ons = float(analyzer.onset[analyzer._idx(t["start"])]) if analyzer.onset is not None else 1.0
+                            t["diag"] = {
+                                "source": "asr" if asr_matched else "dp_boundary",
+                                "ctc_score": 0.55 if asr_matched else 0.35,
+                                "rms_db": round(float(t_rms), 1),
+                                "onset_strength": round(float(t_ons), 2),
+                                "sustain_extended_ms": 0,
+                                "flags": [],
+                            }
+
+            if not tok_list:
+                continue
+
+            # Populate Line Diagnostics
+            flags = []
+            if lead_breath_trimmed >= 150:
+                flags.append({
+                    "code": "LEADING_BREATH_SKIPPED",
+                    "severity": "info",
+                    "detail": f"Skipped {lead_breath_trimmed}ms of low-energy breath/silence [{anc_s}..{adj_s}ms]",
+                })
+
+            tail_sustain_ext = max(0, tok_list[-1]["end"] - (next_nominal or tok_list[-1]["end"]))
+            if next_nominal is not None and tok_list[-1]["end"] > next_nominal + 200:
+                flags.append({
+                    "code": "TAIL_EXTENDED_PAST_NEXT_LRC",
+                    "severity": "info",
+                    "detail": f"Sustained vocal energy held {tail_sustain_ext}ms past next line's nominal LRC timestamp ({next_nominal}ms)",
+                })
+
+            shift_start = tok_list[0]["start"] - orig_lrc_s
+            if abs(shift_start) >= 1200:
+                flags.append({
+                    "code": "LARGE_LRC_SHIFT",
+                    "severity": "warning",
+                    "detail": f"Acoustic alignment shifted start by {shift_start:+d}ms from nominal LRC",
+                })
+
+            c_py = "".join(_token_phonetic_str(c["text"], is_ja=is_ja_song) for c in norm_chars)
+            t_py = "".join(_token_phonetic_str(t["text"], is_ja=is_ja_song) for t in toks)
+            phon_match = float(fuzz.ratio(c_py, t_py)) if (c_py and t_py) else 0.0
+
+            islands = analyzer.active_islands(tok_list[0]["start"], tok_list[-1]["end"])
+            line_mean_ctc = float(np.mean([t.get("diag", {}).get("ctc_score", 0.70) for t in tok_list]))
+            line_mean_rms = analyzer.mean_db(tok_list[0]["start"], tok_list[-1]["end"])
+
+            line_diag: LineDiagnostics = {
+                "line_idx": line_idx_counter,
+                "lrc_nominal_start": orig_lrc_s,
+                "lrc_nominal_end": next_nominal,
+                "shift_from_lrc_start_ms": shift_start,
+                "shift_from_lrc_end_ms": tok_list[-1]["end"] - (next_nominal or tok_list[-1]["end"]),
+                "alignment_method": align_method,
+                "phonetic_match_score": round(phon_match, 1),
+                "mean_ctc_score": round(line_mean_ctc, 2),
+                "mean_rms_db": round(float(line_mean_rms), 1),
+                "lead_in_breath_trimmed_ms": lead_breath_trimmed,
+                "tail_sustain_extended_ms": tail_sustain_ext,
+                "voiced_islands": [[int(a), int(b)] for a, b in islands],
+                "asr_heard_text": " ".join(t.get("text", "") for t in toks),
+                "asr_raw_tokens": [{"text": t.get("text", ""), "start": t.get("start", 0), "end": t.get("end", 0)} for t in toks],
+                "flags": flags,
+            }
+
+            add_phonetics(tok_list)
+            out_lines.append({
+                "start": tok_list[0]["start"],
+                "end": tok_list[-1]["end"],
+                "is_backing": item.get("is_backing", False),
+                "tokens": tok_list,
+                "diag": line_diag,
+            })
+            line_idx_counter += 1
 
     enforce_non_overlapping_lines(out_lines)
     return out_lines

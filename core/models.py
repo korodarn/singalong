@@ -6,6 +6,39 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, TypedDict
 
 
+class DiagnosticFlag(TypedDict, total=False):
+    code: str
+    severity: str  # "info" | "warning" | "error"
+    detail: str
+
+
+class TokenDiagnostics(TypedDict, total=False):
+    source: str  # "mms_fa" | "asr" | "dp_boundary" | "char_weight" | "interpolated"
+    ctc_score: float
+    rms_db: float
+    onset_strength: float
+    sustain_extended_ms: int
+    flags: list[DiagnosticFlag]
+
+
+class LineDiagnostics(TypedDict, total=False):
+    line_idx: int
+    lrc_nominal_start: Optional[int]
+    lrc_nominal_end: Optional[int]
+    shift_from_lrc_start_ms: Optional[int]
+    shift_from_lrc_end_ms: Optional[int]
+    alignment_method: str  # "mms_fa_ctc" | "asr_anchored" | "island_weighted" | "uniform_fallback"
+    phonetic_match_score: float
+    mean_ctc_score: float
+    mean_rms_db: float
+    lead_in_breath_trimmed_ms: int
+    tail_sustain_extended_ms: int
+    voiced_islands: list[list[int]]
+    asr_heard_text: str
+    asr_raw_tokens: list[dict[str, Any]]
+    flags: list[DiagnosticFlag]
+
+
 class TokenDict(TypedDict, total=False):
     text: str
     start: int
@@ -14,6 +47,8 @@ class TokenDict(TypedDict, total=False):
     is_deleted: bool
     pinyin: str
     en: str
+    comment: str
+    diag: TokenDiagnostics
 
 
 class LineDict(TypedDict, total=False):
@@ -21,6 +56,7 @@ class LineDict(TypedDict, total=False):
     end: int
     is_backing: bool
     tokens: list[TokenDict]
+    diag: LineDiagnostics
 
 
 @dataclass

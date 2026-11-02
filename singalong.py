@@ -24,6 +24,7 @@ from core.aligner import (
     fmt_time,
 )
 from core.phonetics import add_phonetics
+from core.workspace import purge_workdir
 
 
 def main():
@@ -31,6 +32,8 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("url", help="YouTube URL or 11-char video ID")
     ap.add_argument("--workdir", default="work", type=Path)
+    ap.add_argument("--purge-work", action="store_true",
+                    help="purge existing workdir artifacts before starting")
     ap.add_argument("--skip-demucs", action="store_true",
                     help="transcribe the full mix (faster, usually less accurate)")
     ap.add_argument("--device", default=None, help="cuda:0 or cpu (auto-detected)")
@@ -54,6 +57,11 @@ def main():
     ap.add_argument("--force-lrc", action="store_true",
                     help="force re-fetching lyrics even if cached")
     args = ap.parse_args()
+
+    if args.purge_work:
+        deleted = purge_workdir(args.workdir)
+        if deleted:
+            print(f"[*] Purged {len(deleted)} artifacts from {args.workdir}")
 
     if args.device is None:
         import torch

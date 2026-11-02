@@ -32,13 +32,17 @@ if VENV_PYTHON.exists() and Path(sys.executable).resolve() != VENV_PYTHON.resolv
 
 from core.linter import lint_project
 from core.media import download_bg_media, detect_media_type, resolve_local_bg_file
-from core.phonetics import load_custom_dict, save_custom_dict
+from core.phonetics import load_custom_dict, save_custom_dict, add_phonetics, has_kana
 from core.lyrics import (
     search_all_lyrics,
     parse_lrc,
     detect_script_distribution,
     validate_lyrics_candidate,
 )
+from core.workspace import purge_workdir
+from core.aligner import VocalAnalyzer, forced_align_with_mms, align_words_in_island, write_outputs
+import torch
+import numpy as np
 
 CONFIG_PATH = Path("config.json")
 DEFAULT_WORKDIR = Path("work")
@@ -223,6 +227,8 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
                 action = parts[3]
                 if action == "save":
                     self.handle_project_save(vid)
+                elif action == "realign-line":
+                    self.handle_realign_line(vid)
                 elif action == "dict":
                     self.handle_dict_update()
                 elif action == "meta":
@@ -232,6 +238,8 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
             else:
                 self.send_error(400, "Missing parameters")
 
+        elif path == "/api/work/purge":
+            self.handle_work_purge()
         elif path == "/api/bg-media/download":
             self.handle_bg_media_download()
         elif path == "/api/bg-media/local":
@@ -520,6 +528,119 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
             self.send_json({"ok": True, "lint": lint_report, "message": "Saved successfully"})
         except Exception as e:
             self.send_json({"ok": False, "error": str(e)}, status=500)
+
+    def handle_realign_line(self, vid: str):
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length)
+        try:
+            payload = json.loads(body.decode("utf-8"))
+            line_idx = payload.get("line_idx")
+            options = payload.get("options") or {}
+        except Exception as e:
+            self.send_json({"ok": False, "error": f"Invalid JSON payload: {e}"}, status=400)
+            return
+
+        json_path = self.server.workdir / f"{vid}.json"
+        if not json_path.exists():
+            self.send_json({"ok": False, "error": "Project not found"}, status=404)
+            return
+
+        try:
+            lines = json.loads(json_path.read_text(encoding="utf-8"))
+            if not (0 <= line_idx < len(lines)):
+                self.send_json({"ok": False, "error": f"Invalid line index: {line_idx}"}, status=400)
+                return
+
+            ln = lines[line_idx]
+            toks = [t for t in ln.get("tokens", []) if not t.get("is_deleted")]
+            if not toks:
+                self.send_json({"ok": False, "error": "Cannot realign empty or deleted line"}, status=400)
+                return
+
+            vocals_cand = self.server.workdir / "htdemucs" / vid / "vocals.wav"
+            if not vocals_cand.exists():
+                vocals_cand = self.server.workdir / f"{vid}.wav"
+            analyzer = VocalAnalyzer(vocals_cand if vocals_cand.exists() else None)
+
+            nom_s = ln.get("start", 0) if ln.get("start", 0) > 0 else (ln.get("diag", {}).get("lrc_nominal_start") or 0)
+            nom_e = (
+                lines[line_idx + 1]["start"] if line_idx + 1 < len(lines) else ln.get("end", 0) + 4000
+            )
+
+            if options.get("ignore_lrc_end_cap"):
+                nom_e = max(nom_e + 2500, ln.get("end", 0) + 2500)
+
+            adj_s, lead_breath = analyzer.find_voiced_attack(nom_s)
+            elastic_e, _ = analyzer.find_elastic_inter_line_boundary(nom_e)
+
+            is_ja = any(has_kana(t.get("text", "")) for t in toks)
+            mms_toks = forced_align_with_mms(
+                toks,
+                adj_s,
+                elastic_e,
+                analyzer,
+                is_ja=is_ja,
+                device="cuda" if torch.cuda.is_available() else "cpu",
+            )
+            if mms_toks and len(mms_toks) == len(toks):
+                tok_list = mms_toks
+                method = "mms_fa_ctc"
+            else:
+                tok_list = align_words_in_island(toks, adj_s, elastic_e, [], analyzer)
+                method = "island_weighted"
+                for t in tok_list:
+                    if "diag" not in t:
+                        t["diag"] = {
+                            "source": "dp_boundary",
+                            "ctc_score": 0.5,
+                            "rms_db": round(float(analyzer.mean_db(t["start"], t["end"])), 1),
+                            "onset_strength": 1.0,
+                            "sustain_extended_ms": 0,
+                            "flags": [],
+                        }
+
+            if tok_list:
+                add_phonetics(tok_list)
+                ln["tokens"] = tok_list
+                ln["start"] = tok_list[0]["start"]
+                ln["end"] = tok_list[-1]["end"]
+                ln["diag"] = {
+                    "line_idx": line_idx,
+                    "lrc_nominal_start": nom_s,
+                    "lrc_nominal_end": nom_e,
+                    "shift_from_lrc_start_ms": ln["start"] - nom_s,
+                    "shift_from_lrc_end_ms": ln["end"] - nom_e,
+                    "alignment_method": method,
+                    "phonetic_match_score": 100.0,
+                    "mean_ctc_score": round(float(np.mean([t.get("diag", {}).get("ctc_score", 0.7) for t in tok_list])), 2),
+                    "mean_rms_db": round(float(analyzer.mean_db(ln["start"], ln["end"])), 1),
+                    "lead_in_breath_trimmed_ms": lead_breath,
+                    "tail_sustain_extended_ms": max(0, ln["end"] - nom_e),
+                    "voiced_islands": [[int(a), int(b)] for a, b in analyzer.active_islands(ln["start"], ln["end"])],
+                    "asr_heard_text": ln.get("diag", {}).get("asr_heard_text", ""),
+                    "asr_raw_tokens": ln.get("diag", {}).get("asr_raw_tokens", []),
+                    "flags": [],
+                }
+
+                write_outputs(vid, lines, self.server.workdir)
+                lint_report = lint_project(json_path, vocals_cand if vocals_cand.exists() else None)
+                self.send_json({"ok": True, "line": ln, "lint": lint_report})
+            else:
+                self.send_json({"ok": False, "error": "Re-alignment yielded no tokens"}, status=500)
+        except Exception as e:
+            self.send_json({"ok": False, "error": str(e)}, status=500)
+
+    def handle_work_purge(self):
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length) if content_length > 0 else b"{}"
+        try:
+            payload = json.loads(body.decode("utf-8")) if body else {}
+        except Exception:
+            payload = {}
+        vid = payload.get("vid")
+        keep_media = bool(payload.get("keep_media", False))
+        deleted = purge_workdir(self.server.workdir, vid=vid, keep_media=keep_media)
+        self.send_json({"ok": True, "deleted": deleted, "count": len(deleted)})
 
     def handle_dict_update(self):
         content_length = int(self.headers.get("Content-Length", 0))
