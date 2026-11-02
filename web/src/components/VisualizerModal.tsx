@@ -43,7 +43,18 @@ const POSITION_PRESETS: { name: string; desc: string; config: Partial<Visualizer
 
 export const VisualizerModal: Component = () => {
   const vis = (): VisualizerConfig => {
-    return store.projectData()?.metadata?.visualizer || DEFAULT_VISUALIZER;
+    const raw = store.projectData()?.metadata?.visualizer;
+    return {
+      ...DEFAULT_VISUALIZER,
+      ...(raw || {}),
+      color: raw?.color || DEFAULT_VISUALIZER.color,
+      type: raw?.type || DEFAULT_VISUALIZER.type,
+      x: typeof raw?.x === 'number' && !isNaN(raw.x) ? raw.x : DEFAULT_VISUALIZER.x,
+      y: typeof raw?.y === 'number' && !isNaN(raw.y) ? raw.y : DEFAULT_VISUALIZER.y,
+      width: typeof raw?.width === 'number' && !isNaN(raw.width) ? raw.width : DEFAULT_VISUALIZER.width,
+      height: typeof raw?.height === 'number' && !isNaN(raw.height) ? raw.height : DEFAULT_VISUALIZER.height,
+      opacity: typeof raw?.opacity === 'number' && !isNaN(raw.opacity) ? raw.opacity : DEFAULT_VISUALIZER.opacity,
+    };
   };
 
   const isEnabled = () => vis().enabled;

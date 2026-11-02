@@ -113,6 +113,7 @@ function createAppStore() {
           config: projectData()?.config || null,
         });
       } else {
+        // Ticks are for high-frequency playback sync ONLY — DO NOT send metadata!
         stageChannel.postMessage({
           type: 'tick',
           vid: currentVid(),
@@ -120,9 +121,7 @@ function createAppStore() {
           totalDurationMs: totalDurationMs(),
           isPlaying: isPlaying(),
           playbackRate: playbackRate(),
-          tierMode: tierMode(),
           activeLineIdx: activeLineIdx(),
-          metadata: projectData()?.metadata || null,
         });
       }
     } catch {}
@@ -147,11 +146,23 @@ function createAppStore() {
           if (typeof msg.playbackRate === 'number') setPlaybackRate(msg.playbackRate);
           if (msg.tierMode) setTierMode(msg.tierMode);
           if (typeof msg.activeLineIdx === 'number') setActiveLineIdx(msg.activeLineIdx);
-          if (msg.metadata && projectData()) {
-            setProjectData({ ...projectData()!, metadata: msg.metadata });
+          if (msg.type === 'full') {
+            if (msg.metadata && projectData()) {
+              setProjectData({ ...projectData()!, metadata: msg.metadata });
+            }
+            if (Array.isArray(msg.lines)) {
+              setLines(msg.lines);
+            }
           }
-          if (msg.type === 'full' && Array.isArray(msg.lines)) {
-            setLines(msg.lines);
+        } else if (msg.type === 'cmd_visualizer' && msg.visualizer !== undefined) {
+          if (projectData()) {
+            setProjectData({
+              ...projectData()!,
+              metadata: {
+                ...projectData()!.metadata,
+                visualizer: msg.visualizer,
+              },
+            });
           }
         }
       } else {
@@ -172,7 +183,19 @@ function createAppStore() {
         } else if (msg.type === 'cmd_dim' && typeof msg.bg_dim_pct === 'number') {
           updateBgMeta({ bg_dim_pct: msg.bg_dim_pct }).catch(() => {});
         } else if (msg.type === 'cmd_visualizer' && msg.visualizer !== undefined) {
-          updateBgMeta({ visualizer: msg.visualizer }).catch(() => {});
+          if (projectData()) {
+            setProjectData({
+              ...projectData()!,
+              metadata: {
+                ...projectData()!.metadata,
+                visualizer: msg.visualizer,
+              },
+            });
+          }
+          const vid = currentVid();
+          if (vid) {
+            updateProjectMeta(vid, { visualizer: msg.visualizer }).catch(() => {});
+          }
         }
       }
     };
@@ -394,11 +417,25 @@ function createAppStore() {
     const currentMeta = projectData()?.metadata;
     const currentVis = currentMeta?.visualizer || DEFAULT_VISUALIZER;
     const merged: VisualizerConfig = {
+      ...DEFAULT_VISUALIZER,
       ...currentVis,
       ...visUpdate,
     };
-    await updateBgMeta({ visualizer: merged });
+    if (projectData()) {
+      setProjectData({
+        ...projectData()!,
+        metadata: {
+          ...projectData()!.metadata,
+          visualizer: merged,
+        },
+      });
+    }
     sendStageCommand({ type: 'cmd_visualizer', visualizer: merged });
+    try {
+      await updateProjectMeta(vid, { visualizer: merged });
+    } catch (e: any) {
+      console.error('Failed to persist visualizer meta:', e);
+    }
   }
 
 

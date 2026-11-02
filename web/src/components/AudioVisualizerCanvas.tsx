@@ -286,6 +286,7 @@ export const AudioVisualizerCanvas: Component<{
         display: 'block',
         width: '100%',
         height: '100%',
+        'pointer-events': 'none',
         ...props.style,
       }}
     />

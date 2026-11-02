@@ -78,26 +78,60 @@ export const DetachedStageWindow: Component = () => {
   const [isEditingVis, setIsEditingVis] = createSignal<boolean>(false);
   const [snapGuideX, setSnapGuideX] = createSignal<number | null>(null);
   const [snapGuideY, setSnapGuideY] = createSignal<number | null>(null);
+  const [isDragging, setIsDragging] = createSignal<boolean>(false);
 
-  const vis = (): VisualizerConfig => {
-    return store.projectData()?.metadata?.visualizer || DEFAULT_VISUALIZER;
+  const getSafeVis = (raw?: VisualizerConfig | null): VisualizerConfig => {
+    return {
+      enabled: raw?.enabled ?? DEFAULT_VISUALIZER.enabled,
+      type: raw?.type || DEFAULT_VISUALIZER.type,
+      x: typeof raw?.x === 'number' && !isNaN(raw.x) ? raw.x : DEFAULT_VISUALIZER.x,
+      y: typeof raw?.y === 'number' && !isNaN(raw.y) ? raw.y : DEFAULT_VISUALIZER.y,
+      width: typeof raw?.width === 'number' && !isNaN(raw.width) ? raw.width : DEFAULT_VISUALIZER.width,
+      height: typeof raw?.height === 'number' && !isNaN(raw.height) ? raw.height : DEFAULT_VISUALIZER.height,
+      color: raw?.color || DEFAULT_VISUALIZER.color,
+      opacity: typeof raw?.opacity === 'number' && !isNaN(raw.opacity) ? raw.opacity : DEFAULT_VISUALIZER.opacity,
+      audio_source: raw?.audio_source || DEFAULT_VISUALIZER.audio_source,
+      mirror: raw?.mirror ?? DEFAULT_VISUALIZER.mirror,
+    };
+  };
+
+  const [localVis, setLocalVis] = createSignal<VisualizerConfig>(
+    getSafeVis(store.projectData()?.metadata?.visualizer)
+  );
+
+  // Sync from store when external changes arrive and user is not actively dragging
+  createEffect(() => {
+    if (isDragging()) return;
+    const remote = store.projectData()?.metadata?.visualizer;
+    if (remote) {
+      setLocalVis(getSafeVis(remote));
+    }
+  });
+
+  const updateVis = (patch: Partial<VisualizerConfig>) => {
+    const next = { ...localVis(), ...patch };
+    setLocalVis(next);
+    store.updateVisualizer(next);
   };
 
   const handleVisMouseDown = (e: MouseEvent) => {
     if (!isEditingVis()) return;
     e.preventDefault();
     e.stopPropagation();
+    setIsDragging(true);
 
     const startX = e.clientX;
     const startY = e.clientY;
-    const current = vis();
+    const current = localVis();
     const initX = current.x;
     const initY = current.y;
     const initW = current.width;
     const initH = current.height;
+    let curX = initX;
+    let curY = initY;
 
     const onMove = (ev: MouseEvent) => {
-      const scale = canvasScale();
+      const scale = canvasScale() || 1.0;
       const dx = (ev.clientX - startX) / scale;
       const dy = (ev.clientY - startY) / scale;
 
@@ -121,14 +155,19 @@ export const DetachedStageWindow: Component = () => {
         setSnapGuideY(null);
       }
 
-      store.updateVisualizer({ x: nx, y: ny });
+      curX = nx;
+      curY = ny;
+      setLocalVis((prev) => ({ ...prev, x: nx, y: ny }));
     };
 
-    const onUp = () => {
+    const onUp = (ev: MouseEvent) => {
+      ev.stopPropagation();
+      setIsDragging(false);
       setSnapGuideX(null);
       setSnapGuideY(null);
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      store.updateVisualizer({ x: curX, y: curY });
     };
 
     window.addEventListener('mousemove', onMove);
@@ -139,17 +178,21 @@ export const DetachedStageWindow: Component = () => {
     if (!isEditingVis()) return;
     e.preventDefault();
     e.stopPropagation();
+    setIsDragging(true);
 
     const startX = e.clientX;
     const startY = e.clientY;
-    const current = vis();
+    const current = localVis();
     const initX = current.x;
     const initY = current.y;
     const initW = current.width;
     const initH = current.height;
+    const rightEdge = initX + initW;
+    const bottomEdge = initY + initH;
+    let finalBox = { x: initX, y: initY, width: initW, height: initH };
 
     const onMove = (ev: MouseEvent) => {
-      const scale = canvasScale();
+      const scale = canvasScale() || 1.0;
       const dx = (ev.clientX - startX) / scale;
       const dy = (ev.clientY - startY) / scale;
 
@@ -165,24 +208,24 @@ export const DetachedStageWindow: Component = () => {
         nextH = Math.max(30, Math.min(1080 - initY, Math.round(initH + dy)));
       }
       if (direction.includes('w')) {
-        const candW = Math.max(80, Math.round(initW - dx));
-        const candX = Math.max(0, Math.round(initX + (initW - candW)));
-        nextW = candW;
-        nextX = candX;
+        nextX = Math.max(0, Math.min(rightEdge - 80, Math.round(initX + dx)));
+        nextW = rightEdge - nextX;
       }
       if (direction.includes('n')) {
-        const candH = Math.max(30, Math.round(initH - dy));
-        const candY = Math.max(0, Math.round(initY + (initH - candH)));
-        nextH = candH;
-        nextY = candY;
+        nextY = Math.max(0, Math.min(bottomEdge - 30, Math.round(initY + dy)));
+        nextH = bottomEdge - nextY;
       }
 
-      store.updateVisualizer({ x: nextX, y: nextY, width: nextW, height: nextH });
+      finalBox = { x: nextX, y: nextY, width: nextW, height: nextH };
+      setLocalVis((prev) => ({ ...prev, ...finalBox }));
     };
 
-    const onUp = () => {
+    const onUp = (ev: MouseEvent) => {
+      ev.stopPropagation();
+      setIsDragging(false);
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      store.updateVisualizer(finalBox);
     };
 
     window.addEventListener('mousemove', onMove);
@@ -724,11 +767,11 @@ export const DetachedStageWindow: Component = () => {
             </div>
 
             <button
-              class={`btn btn-sm ${isEditingVis() ? 'btn-lead' : vis().enabled ? 'btn-primary' : ''}`}
+              class={`btn btn-sm ${isEditingVis() ? 'btn-lead' : localVis().enabled ? 'btn-primary' : ''}`}
               onClick={() => setIsEditingVis(!isEditingVis())}
               title="Toggle audio visualizer positioning & selection options (V)"
             >
-              🎵 Visualizer {vis().enabled ? '(ON)' : ''}
+              🎵 Visualizer {localVis().enabled ? '(ON)' : ''}
             </button>
 
             <button
@@ -759,60 +802,60 @@ export const DetachedStageWindow: Component = () => {
 
         {/* Floating Visualizer Controls Toolbar when in editing mode */}
         <Show when={isEditingVis()}>
-          <div class="sim-vis-toolbar">
+          <div class="sim-vis-toolbar" onClick={(e) => e.stopPropagation()}>
             <div class="sim-vis-toolbar-row">
               <label class="toggle-control">
                 <input
                   type="checkbox"
-                  checked={vis().enabled}
-                  onChange={(e) => store.updateVisualizer({ enabled: e.currentTarget.checked })}
+                  checked={localVis().enabled}
+                  onChange={(e) => updateVis({ enabled: e.currentTarget.checked })}
                 />
                 <span class="toggle-slider" />
                 <strong class="text-accent text-sm">
-                  {vis().enabled ? 'Visualizer ENABLED' : 'Visualizer DISABLED'}
+                  {localVis().enabled ? 'Visualizer ENABLED' : 'Visualizer DISABLED'}
                 </strong>
               </label>
 
               {/* Form Selector Pills */}
               <div class="btn-group">
                 <button
-                  class={`btn-toggle ${vis().type === 'bars' ? 'active' : ''}`}
-                  onClick={() => store.updateVisualizer({ type: 'bars' })}
+                  class={`btn-toggle ${localVis().type === 'bars' ? 'active' : ''}`}
+                  onClick={() => updateVis({ type: 'bars' })}
                   title="Frequency Equalizer Bars"
                 >
                   📊 Bars
                 </button>
                 <button
-                  class={`btn-toggle ${vis().type === 'waveform' ? 'active' : ''}`}
-                  onClick={() => store.updateVisualizer({ type: 'waveform' })}
+                  class={`btn-toggle ${localVis().type === 'waveform' ? 'active' : ''}`}
+                  onClick={() => updateVis({ type: 'waveform' })}
                   title="Centered Waveform"
                 >
                   〰️ Waveform
                 </button>
                 <button
-                  class={`btn-toggle ${vis().type === 'line' ? 'active' : ''}`}
-                  onClick={() => store.updateVisualizer({ type: 'line' })}
+                  class={`btn-toggle ${localVis().type === 'line' ? 'active' : ''}`}
+                  onClick={() => updateVis({ type: 'line' })}
                   title="Sound Wave Line"
                 >
                   📈 Line
                 </button>
                 <button
-                  class={`btn-toggle ${vis().type === 'p2p' ? 'active' : ''}`}
-                  onClick={() => store.updateVisualizer({ type: 'p2p' })}
+                  class={`btn-toggle ${localVis().type === 'p2p' ? 'active' : ''}`}
+                  onClick={() => updateVis({ type: 'p2p' })}
                   title="Peak Envelope Bars"
                 >
                   📶 Peaks
                 </button>
                 <button
-                  class={`btn-toggle ${vis().type === 'circle' ? 'active' : ''}`}
-                  onClick={() => store.updateVisualizer({ type: 'circle' })}
+                  class={`btn-toggle ${localVis().type === 'circle' ? 'active' : ''}`}
+                  onClick={() => updateVis({ type: 'circle' })}
                   title="Radial Oscilloscope Circle"
                 >
                   ⭕ Circle
                 </button>
                 <button
-                  class={`btn-toggle ${vis().type === 'volume' ? 'active' : ''}`}
-                  onClick={() => store.updateVisualizer({ type: 'volume' })}
+                  class={`btn-toggle ${localVis().type === 'volume' ? 'active' : ''}`}
+                  onClick={() => updateVis({ type: 'volume' })}
                   title="Stereo VU Meter"
                 >
                   🎚️ VU
@@ -824,17 +867,18 @@ export const DetachedStageWindow: Component = () => {
                 <For each={COLOR_PRESETS}>
                   {(item) => (
                     <button
-                      class={`vis-color-dot ${vis().color.toLowerCase() === item.hex.toLowerCase() ? 'active' : ''}`}
+                      class={`vis-color-dot ${(localVis().color || '#FFD700').toLowerCase() === item.hex.toLowerCase() ? 'active' : ''}`}
                       style={{ 'background-color': item.hex }}
-                      onClick={() => store.updateVisualizer({ color: item.hex })}
+                      onClick={() => updateVis({ color: item.hex })}
                       title={item.name}
                     />
                   )}
                 </For>
                 <input
                   type="color"
-                  value={vis().color || '#FFD700'}
-                  onInput={(e) => store.updateVisualizer({ color: e.currentTarget.value })}
+                  value={localVis().color || '#FFD700'}
+                  onInput={(e) => setLocalVis((prev) => ({ ...prev, color: e.currentTarget.value }))}
+                  onChange={(e) => updateVis({ color: e.currentTarget.value })}
                   class="sim-vis-color-pick"
                   title="Custom color"
                 />
@@ -842,14 +886,21 @@ export const DetachedStageWindow: Component = () => {
 
               {/* Opacity */}
               <div class="sim-sync-pill">
-                <span>Opacity: {Math.round((vis().opacity ?? 0.85) * 100)}%</span>
+                <span>Opacity: {Math.round((localVis().opacity ?? 0.85) * 100)}%</span>
                 <input
                   type="range"
                   min="10"
                   max="100"
                   step="5"
-                  value={Math.round((vis().opacity ?? 0.85) * 100)}
-                  onInput={(e) => store.updateVisualizer({ opacity: parseInt(e.currentTarget.value, 10) / 100.0 })}
+                  value={Math.round((localVis().opacity ?? 0.85) * 100)}
+                  onInput={(e) => {
+                    const val = parseInt(e.currentTarget.value, 10) / 100.0;
+                    setLocalVis((prev) => ({ ...prev, opacity: val }));
+                  }}
+                  onChange={(e) => {
+                    const val = parseInt(e.currentTarget.value, 10) / 100.0;
+                    updateVis({ opacity: val });
+                  }}
                   style={{ width: '60px' }}
                 />
               </div>
@@ -857,15 +908,15 @@ export const DetachedStageWindow: Component = () => {
               {/* Audio Source */}
               <div class="btn-group">
                 <button
-                  class={`btn-toggle ${vis().audio_source !== 'vocals' ? 'active' : ''}`}
-                  onClick={() => store.updateVisualizer({ audio_source: 'mix' })}
+                  class={`btn-toggle ${localVis().audio_source !== 'vocals' ? 'active' : ''}`}
+                  onClick={() => updateVis({ audio_source: 'mix' })}
                   title="Visualize entire mix"
                 >
                   🎵 Mix
                 </button>
                 <button
-                  class={`btn-toggle ${vis().audio_source === 'vocals' ? 'active' : ''}`}
-                  onClick={() => store.updateVisualizer({ audio_source: 'vocals' })}
+                  class={`btn-toggle ${localVis().audio_source === 'vocals' ? 'active' : ''}`}
+                  onClick={() => updateVis({ audio_source: 'vocals' })}
                   title="Visualize vocal track only"
                 >
                   🎤 Vocals
@@ -888,7 +939,7 @@ export const DetachedStageWindow: Component = () => {
                   {(p) => (
                     <button
                       class="btn btn-sm btn-ghost"
-                      onClick={() => store.updateVisualizer({ x: p.x, y: p.y, width: p.width, height: p.height, ...(p.type ? { type: p.type } : {}) })}
+                      onClick={() => updateVis({ x: p.x, y: p.y, width: p.width, height: p.height, ...(p.type ? { type: p.type } : {}) })}
                       title={p.desc}
                     >
                       {p.name}
@@ -902,40 +953,68 @@ export const DetachedStageWindow: Component = () => {
                 <input
                   type="number"
                   class="sim-vis-num-input"
-                  value={vis().x}
-                  onInput={(e) => store.updateVisualizer({ x: parseInt(e.currentTarget.value, 10) || 0 })}
+                  value={localVis().x}
+                  onInput={(e) => {
+                    const v = parseInt(e.currentTarget.value, 10);
+                    if (!isNaN(v)) setLocalVis((prev) => ({ ...prev, x: v }));
+                  }}
+                  onChange={(e) => {
+                    const v = parseInt(e.currentTarget.value, 10);
+                    if (!isNaN(v)) updateVis({ x: v });
+                  }}
                 />
                 <span class="text-xs text-muted">Y:</span>
                 <input
                   type="number"
                   class="sim-vis-num-input"
-                  value={vis().y}
-                  onInput={(e) => store.updateVisualizer({ y: parseInt(e.currentTarget.value, 10) || 0 })}
+                  value={localVis().y}
+                  onInput={(e) => {
+                    const v = parseInt(e.currentTarget.value, 10);
+                    if (!isNaN(v)) setLocalVis((prev) => ({ ...prev, y: v }));
+                  }}
+                  onChange={(e) => {
+                    const v = parseInt(e.currentTarget.value, 10);
+                    if (!isNaN(v)) updateVis({ y: v });
+                  }}
                 />
                 <span class="text-xs text-muted">W:</span>
                 <input
                   type="number"
                   class="sim-vis-num-input"
-                  value={vis().width}
-                  onInput={(e) => store.updateVisualizer({ width: parseInt(e.currentTarget.value, 10) || 80 })}
+                  value={localVis().width}
+                  onInput={(e) => {
+                    const v = parseInt(e.currentTarget.value, 10);
+                    if (!isNaN(v)) setLocalVis((prev) => ({ ...prev, width: v }));
+                  }}
+                  onChange={(e) => {
+                    const v = parseInt(e.currentTarget.value, 10);
+                    if (!isNaN(v)) updateVis({ width: v });
+                  }}
                 />
                 <span class="text-xs text-muted">H:</span>
                 <input
                   type="number"
                   class="sim-vis-num-input"
-                  value={vis().height}
-                  onInput={(e) => store.updateVisualizer({ height: parseInt(e.currentTarget.value, 10) || 30 })}
+                  value={localVis().height}
+                  onInput={(e) => {
+                    const v = parseInt(e.currentTarget.value, 10);
+                    if (!isNaN(v)) setLocalVis((prev) => ({ ...prev, height: v }));
+                  }}
+                  onChange={(e) => {
+                    const v = parseInt(e.currentTarget.value, 10);
+                    if (!isNaN(v)) updateVis({ height: v });
+                  }}
                 />
                 <button
                   class="btn btn-xs btn-secondary"
-                  onClick={() => store.updateVisualizer({ x: Math.round((1920 - vis().width) / 2) })}
+                  onClick={() => updateVis({ x: Math.round((1920 - localVis().width) / 2) })}
                   title="Center horizontally"
                 >
                   ⬌ Center X
                 </button>
                 <button
                   class="btn btn-xs btn-secondary"
-                  onClick={() => store.updateVisualizer({ y: Math.round((1080 - vis().height) / 2) })}
+                  onClick={() => updateVis({ y: Math.round((1080 - localVis().height) / 2) })}
                   title="Center vertically"
                 >
                   ⬍ Center Y
@@ -1029,45 +1108,55 @@ export const DetachedStageWindow: Component = () => {
           </Show>
 
           {/* Layer 2.5: Audio Visualizer Layer (Interactive Drag & Resize on 1080p Canvas) */}
-          <Show when={vis().enabled || isEditingVis()}>
+          <Show when={localVis().enabled || isEditingVis()}>
             <div
               class={`sim-visualizer-container ${isEditingVis() ? 'is-editing' : ''}`}
               style={{
                 position: 'absolute',
-                left: `${vis().x}px`,
-                top: `${vis().y}px`,
-                width: `${vis().width}px`,
-                height: `${vis().height}px`,
-                opacity: vis().opacity ?? 0.85,
+                left: `${localVis().x}px`,
+                top: `${localVis().y}px`,
+                width: `${localVis().width}px`,
+                height: `${localVis().height}px`,
+                opacity: localVis().opacity ?? 0.85,
                 'pointer-events': isEditingVis() ? 'auto' : 'none',
                 cursor: isEditingVis() ? 'move' : 'default',
                 'z-index': 15,
               }}
               onMouseDown={handleVisMouseDown}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
             >
               <AudioVisualizerCanvas
-                config={vis()}
+                config={localVis()}
                 audioElement={visAudioEl()}
                 isPlaying={store.isPlaying()}
               />
 
               {/* Interactive Bounding Box and Resize Handles in Edit Mode */}
               <Show when={isEditingVis()}>
-                <div class="sim-vis-edit-box">
+                <div
+                  class="sim-vis-edit-box"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                >
                   <div class="sim-vis-badge">
-                    📍 {vis().type.toUpperCase()} • X:{vis().x} Y:{vis().y} | {vis().width}×{vis().height} px
+                    📍 {localVis().type.toUpperCase()} • X:{localVis().x} Y:{localVis().y} | {localVis().width}×{localVis().height} px
                   </div>
                   <div class="sim-vis-drag-cue">✥ Drag to move</div>
 
                   {/* 8 resize handles */}
-                  <div class="vis-handle handle-nw" onMouseDown={(e) => handleResizeMouseDown(e, 'nw')} />
-                  <div class="vis-handle handle-n"  onMouseDown={(e) => handleResizeMouseDown(e, 'n')} />
-                  <div class="vis-handle handle-ne" onMouseDown={(e) => handleResizeMouseDown(e, 'ne')} />
-                  <div class="vis-handle handle-e"  onMouseDown={(e) => handleResizeMouseDown(e, 'e')} />
-                  <div class="vis-handle handle-se" onMouseDown={(e) => handleResizeMouseDown(e, 'se')} />
-                  <div class="vis-handle handle-s"  onMouseDown={(e) => handleResizeMouseDown(e, 's')} />
-                  <div class="vis-handle handle-sw" onMouseDown={(e) => handleResizeMouseDown(e, 'sw')} />
-                  <div class="vis-handle handle-w"  onMouseDown={(e) => handleResizeMouseDown(e, 'w')} />
+                  <div class="vis-handle handle-nw" onMouseDown={(e) => handleResizeMouseDown(e, 'nw')} onClick={(e) => e.stopPropagation()} />
+                  <div class="vis-handle handle-n"  onMouseDown={(e) => handleResizeMouseDown(e, 'n')}  onClick={(e) => e.stopPropagation()} />
+                  <div class="vis-handle handle-ne" onMouseDown={(e) => handleResizeMouseDown(e, 'ne')} onClick={(e) => e.stopPropagation()} />
+                  <div class="vis-handle handle-e"  onMouseDown={(e) => handleResizeMouseDown(e, 'e')}  onClick={(e) => e.stopPropagation()} />
+                  <div class="vis-handle handle-se" onMouseDown={(e) => handleResizeMouseDown(e, 'se')} onClick={(e) => e.stopPropagation()} />
+                  <div class="vis-handle handle-s"  onMouseDown={(e) => handleResizeMouseDown(e, 's')}  onClick={(e) => e.stopPropagation()} />
+                  <div class="vis-handle handle-sw" onMouseDown={(e) => handleResizeMouseDown(e, 'sw')} onClick={(e) => e.stopPropagation()} />
+                  <div class="vis-handle handle-w"  onMouseDown={(e) => handleResizeMouseDown(e, 'w')}  onClick={(e) => e.stopPropagation()} />
                 </div>
               </Show>
             </div>
