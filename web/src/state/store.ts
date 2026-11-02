@@ -1,6 +1,19 @@
 import { createSignal, createRoot } from 'solid-js';
-import { ProjectData, ProjectMetadata, ProjectSummary, Line, Token } from '../types';
+import { ProjectData, ProjectMetadata, ProjectSummary, Line, Token, VisualizerConfig } from '../types';
 import { fetchProjects, fetchProject, saveProject, updateProjectMeta } from '../api';
+
+export const DEFAULT_VISUALIZER: VisualizerConfig = {
+  enabled: false,
+  type: 'bars',
+  x: 260,
+  y: 780,
+  width: 1400,
+  height: 160,
+  color: '#FFD700',
+  opacity: 0.85,
+  audio_source: 'mix',
+  mirror: true,
+};
 
 export interface ToastItem {
   id: number;
@@ -61,6 +74,7 @@ function createAppStore() {
   const [showIngestModal, setShowIngestModal] = createSignal<boolean>(false);
   const [showRenderModal, setShowRenderModal] = createSignal<boolean>(false);
   const [showVideoBgModal, setShowVideoBgModal] = createSignal<boolean>(false);
+  const [showVisualizerModal, setShowVisualizerModal] = createSignal<boolean>(false);
   const [showCommentModal, setShowCommentModal] = createSignal<boolean>(false);
   const [editingToken, setEditingToken] = createSignal<{ lineIdx: number; tokenIdx: number; token: Token } | null>(null);
 
@@ -157,6 +171,8 @@ function createAppStore() {
           updateBgMeta({ bg_offset_ms: msg.bg_offset_ms }).catch(() => {});
         } else if (msg.type === 'cmd_dim' && typeof msg.bg_dim_pct === 'number') {
           updateBgMeta({ bg_dim_pct: msg.bg_dim_pct }).catch(() => {});
+        } else if (msg.type === 'cmd_visualizer' && msg.visualizer !== undefined) {
+          updateBgMeta({ visualizer: msg.visualizer }).catch(() => {});
         }
       }
     };
@@ -370,6 +386,19 @@ function createAppStore() {
       addToast(`Error updating background: ${e.message}`);
       throw e;
     }
+  }
+
+  async function updateVisualizer(visUpdate: Partial<VisualizerConfig>) {
+    const vid = currentVid();
+    if (!vid) return;
+    const currentMeta = projectData()?.metadata;
+    const currentVis = currentMeta?.visualizer || DEFAULT_VISUALIZER;
+    const merged: VisualizerConfig = {
+      ...currentVis,
+      ...visUpdate,
+    };
+    await updateBgMeta({ visualizer: merged });
+    sendStageCommand({ type: 'cmd_visualizer', visualizer: merged });
   }
 
 
@@ -783,7 +812,10 @@ function createAppStore() {
     setShowRenderModal,
     showVideoBgModal,
     setShowVideoBgModal,
+    showVisualizerModal,
+    setShowVisualizerModal,
     updateBgMeta,
+    updateVisualizer,
     showCommentModal,
     setShowCommentModal,
     openCommentModal,

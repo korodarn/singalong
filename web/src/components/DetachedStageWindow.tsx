@@ -1,6 +1,26 @@
 import { Component, For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
-import { store, fmtMs } from '../state/store';
-import { Line, Token } from '../types';
+import { store, fmtMs, DEFAULT_VISUALIZER } from '../state/store';
+import { Line, Token, VisualizerConfig } from '../types';
+import { AudioVisualizerCanvas } from './AudioVisualizerCanvas';
+
+const COLOR_PRESETS = [
+  { name: 'Lead Gold', hex: '#FFD700' },
+  { name: 'Backing Cyan', hex: '#70D6FF' },
+  { name: 'Neon Green', hex: '#00FFA3' },
+  { name: 'Hot Pink', hex: '#FF007F' },
+  { name: 'Purple Neon', hex: '#9D4EDD' },
+  { name: 'Pure White', hex: '#FFFFFF' },
+  { name: 'Sunset Coral', hex: '#FF6B6B' },
+  { name: 'Amber Flame', hex: '#FF9F1C' },
+];
+
+const POSITION_PRESETS: { name: string; desc: string; x: number; y: number; width: number; height: number; type?: VisualizerConfig['type'] }[] = [
+  { name: 'Above Lyrics', desc: 'Centered above subtitles (1400×160)', x: 260, y: 770, width: 1400, height: 160 },
+  { name: 'Bottom Strip', desc: 'Full width bottom bar (1920×80)', x: 0, y: 1000, width: 1920, height: 80 },
+  { name: 'Top Banner', desc: 'Full width top edge (1920×90)', x: 0, y: 0, width: 1920, height: 90 },
+  { name: 'Center Stage', desc: 'Center screen wave (1200×220)', x: 360, y: 430, width: 1200, height: 220 },
+  { name: 'Center Circle', desc: 'Radial circle scope (320×320)', x: 800, y: 380, width: 320, height: 320, type: 'circle' },
+];
 
 interface RenderLineWindow {
   line: Line;
@@ -54,6 +74,120 @@ export const DetachedStageWindow: Component = () => {
   const [localAudioActive, setLocalAudioActive] = createSignal<boolean>(false);
   const [showHud, setShowHud] = createSignal<boolean>(true);
   const [showSafeGuides, setShowSafeGuides] = createSignal<boolean>(false);
+  const [visAudioEl, setVisAudioEl] = createSignal<HTMLAudioElement | null>(null);
+  const [isEditingVis, setIsEditingVis] = createSignal<boolean>(false);
+  const [snapGuideX, setSnapGuideX] = createSignal<number | null>(null);
+  const [snapGuideY, setSnapGuideY] = createSignal<number | null>(null);
+
+  const vis = (): VisualizerConfig => {
+    return store.projectData()?.metadata?.visualizer || DEFAULT_VISUALIZER;
+  };
+
+  const handleVisMouseDown = (e: MouseEvent) => {
+    if (!isEditingVis()) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const current = vis();
+    const initX = current.x;
+    const initY = current.y;
+    const initW = current.width;
+    const initH = current.height;
+
+    const onMove = (ev: MouseEvent) => {
+      const scale = canvasScale();
+      const dx = (ev.clientX - startX) / scale;
+      const dy = (ev.clientY - startY) / scale;
+
+      let nx = Math.round(initX + dx);
+      let ny = Math.round(initY + dy);
+
+      nx = Math.max(0, Math.min(1920 - initW, nx));
+      ny = Math.max(0, Math.min(1080 - initH, ny));
+
+      if (Math.abs(nx + initW / 2 - 960) < 18) {
+        nx = 960 - Math.round(initW / 2);
+        setSnapGuideX(960);
+      } else {
+        setSnapGuideX(null);
+      }
+
+      if (Math.abs(ny + initH / 2 - 540) < 18) {
+        ny = 540 - Math.round(initH / 2);
+        setSnapGuideY(540);
+      } else {
+        setSnapGuideY(null);
+      }
+
+      store.updateVisualizer({ x: nx, y: ny });
+    };
+
+    const onUp = () => {
+      setSnapGuideX(null);
+      setSnapGuideY(null);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  const handleResizeMouseDown = (e: MouseEvent, direction: string) => {
+    if (!isEditingVis()) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const current = vis();
+    const initX = current.x;
+    const initY = current.y;
+    const initW = current.width;
+    const initH = current.height;
+
+    const onMove = (ev: MouseEvent) => {
+      const scale = canvasScale();
+      const dx = (ev.clientX - startX) / scale;
+      const dy = (ev.clientY - startY) / scale;
+
+      let nextX = initX;
+      let nextY = initY;
+      let nextW = initW;
+      let nextH = initH;
+
+      if (direction.includes('e')) {
+        nextW = Math.max(80, Math.min(1920 - initX, Math.round(initW + dx)));
+      }
+      if (direction.includes('s')) {
+        nextH = Math.max(30, Math.min(1080 - initY, Math.round(initH + dy)));
+      }
+      if (direction.includes('w')) {
+        const candW = Math.max(80, Math.round(initW - dx));
+        const candX = Math.max(0, Math.round(initX + (initW - candW)));
+        nextW = candW;
+        nextX = candX;
+      }
+      if (direction.includes('n')) {
+        const candH = Math.max(30, Math.round(initH - dy));
+        const candY = Math.max(0, Math.round(initY + (initH - candH)));
+        nextH = candH;
+        nextY = candY;
+      }
+
+      store.updateVisualizer({ x: nextX, y: nextY, width: nextW, height: nextH });
+    };
+
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
 
   const meta = () => store.projectData()?.metadata;
   const hasBgMedia = () => Boolean(meta()?.bg_media_path || meta()?.bg_video_path);
@@ -114,6 +248,9 @@ export const DetachedStageWindow: Component = () => {
       } else if (e.key === 'g' || e.key === 'G') {
         e.preventDefault();
         setShowSafeGuides(!showSafeGuides());
+      } else if (e.key === 'v' || e.key === 'V') {
+        e.preventDefault();
+        setIsEditingVis(!isEditingVis());
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -193,6 +330,26 @@ export const DetachedStageWindow: Component = () => {
       a.play().catch(() => {});
     } else {
       a.pause();
+    }
+  });
+
+  // Dedicated silent audio playback for visualizer AnalyserNode
+  createEffect(() => {
+    const va = visAudioEl();
+    if (!va) return;
+    va.muted = true;
+    va.playbackRate = store.playbackRate();
+    const playing = store.isPlaying();
+    const targetSec = store.currentTimeMs() / 1000.0;
+    if (Math.abs(va.currentTime - targetSec) > 0.3) {
+      try {
+        va.currentTime = targetSec;
+      } catch {}
+    }
+    if (playing) {
+      va.play().catch(() => {});
+    } else {
+      va.pause();
     }
   });
 
@@ -507,8 +664,18 @@ export const DetachedStageWindow: Component = () => {
 
   return (
     <div class="detached-stage-shell">
-      {/* Optional standalone audio element if user enables monitor audio in this window */}
+      {/* Dedicated silent audio source feeding the visualizer AnalyserNode */}
       <Show when={store.currentVid()}>
+        <audio
+          ref={(el) => setVisAudioEl(el)}
+          src={
+            vis().audio_source === 'vocals' && store.projectData()?.has_vocals
+              ? `/api/audio/${encodeURIComponent(store.currentVid())}/vocals`
+              : `/api/audio/${encodeURIComponent(store.currentVid())}/mix`
+          }
+          preload="auto"
+          muted
+        />
         <audio
           ref={(el) => setAudioEl(el)}
           src={`/api/audio/${encodeURIComponent(store.currentVid())}/mix`}
@@ -557,6 +724,14 @@ export const DetachedStageWindow: Component = () => {
             </div>
 
             <button
+              class={`btn btn-sm ${isEditingVis() ? 'btn-lead' : vis().enabled ? 'btn-primary' : ''}`}
+              onClick={() => setIsEditingVis(!isEditingVis())}
+              title="Toggle audio visualizer positioning & selection options (V)"
+            >
+              🎵 Visualizer {vis().enabled ? '(ON)' : ''}
+            </button>
+
+            <button
               class={`btn btn-sm ${showSafeGuides() ? 'btn-primary' : ''}`}
               onClick={() => setShowSafeGuides(!showSafeGuides())}
               title="Toggle 1920x1080 Safe Area & Subtitle Margin Guides (G)"
@@ -581,6 +756,194 @@ export const DetachedStageWindow: Component = () => {
             </button>
           </div>
         </header>
+
+        {/* Floating Visualizer Controls Toolbar when in editing mode */}
+        <Show when={isEditingVis()}>
+          <div class="sim-vis-toolbar">
+            <div class="sim-vis-toolbar-row">
+              <label class="toggle-control">
+                <input
+                  type="checkbox"
+                  checked={vis().enabled}
+                  onChange={(e) => store.updateVisualizer({ enabled: e.currentTarget.checked })}
+                />
+                <span class="toggle-slider" />
+                <strong class="text-accent text-sm">
+                  {vis().enabled ? 'Visualizer ENABLED' : 'Visualizer DISABLED'}
+                </strong>
+              </label>
+
+              {/* Form Selector Pills */}
+              <div class="btn-group">
+                <button
+                  class={`btn-toggle ${vis().type === 'bars' ? 'active' : ''}`}
+                  onClick={() => store.updateVisualizer({ type: 'bars' })}
+                  title="Frequency Equalizer Bars"
+                >
+                  📊 Bars
+                </button>
+                <button
+                  class={`btn-toggle ${vis().type === 'waveform' ? 'active' : ''}`}
+                  onClick={() => store.updateVisualizer({ type: 'waveform' })}
+                  title="Centered Waveform"
+                >
+                  〰️ Waveform
+                </button>
+                <button
+                  class={`btn-toggle ${vis().type === 'line' ? 'active' : ''}`}
+                  onClick={() => store.updateVisualizer({ type: 'line' })}
+                  title="Sound Wave Line"
+                >
+                  📈 Line
+                </button>
+                <button
+                  class={`btn-toggle ${vis().type === 'p2p' ? 'active' : ''}`}
+                  onClick={() => store.updateVisualizer({ type: 'p2p' })}
+                  title="Peak Envelope Bars"
+                >
+                  📶 Peaks
+                </button>
+                <button
+                  class={`btn-toggle ${vis().type === 'circle' ? 'active' : ''}`}
+                  onClick={() => store.updateVisualizer({ type: 'circle' })}
+                  title="Radial Oscilloscope Circle"
+                >
+                  ⭕ Circle
+                </button>
+                <button
+                  class={`btn-toggle ${vis().type === 'volume' ? 'active' : ''}`}
+                  onClick={() => store.updateVisualizer({ type: 'volume' })}
+                  title="Stereo VU Meter"
+                >
+                  🎚️ VU
+                </button>
+              </div>
+
+              {/* Color Swatches */}
+              <div class="sim-vis-color-swatches">
+                <For each={COLOR_PRESETS}>
+                  {(item) => (
+                    <button
+                      class={`vis-color-dot ${vis().color.toLowerCase() === item.hex.toLowerCase() ? 'active' : ''}`}
+                      style={{ 'background-color': item.hex }}
+                      onClick={() => store.updateVisualizer({ color: item.hex })}
+                      title={item.name}
+                    />
+                  )}
+                </For>
+                <input
+                  type="color"
+                  value={vis().color || '#FFD700'}
+                  onInput={(e) => store.updateVisualizer({ color: e.currentTarget.value })}
+                  class="sim-vis-color-pick"
+                  title="Custom color"
+                />
+              </div>
+
+              {/* Opacity */}
+              <div class="sim-sync-pill">
+                <span>Opacity: {Math.round((vis().opacity ?? 0.85) * 100)}%</span>
+                <input
+                  type="range"
+                  min="10"
+                  max="100"
+                  step="5"
+                  value={Math.round((vis().opacity ?? 0.85) * 100)}
+                  onInput={(e) => store.updateVisualizer({ opacity: parseInt(e.currentTarget.value, 10) / 100.0 })}
+                  style={{ width: '60px' }}
+                />
+              </div>
+
+              {/* Audio Source */}
+              <div class="btn-group">
+                <button
+                  class={`btn-toggle ${vis().audio_source !== 'vocals' ? 'active' : ''}`}
+                  onClick={() => store.updateVisualizer({ audio_source: 'mix' })}
+                  title="Visualize entire mix"
+                >
+                  🎵 Mix
+                </button>
+                <button
+                  class={`btn-toggle ${vis().audio_source === 'vocals' ? 'active' : ''}`}
+                  onClick={() => store.updateVisualizer({ audio_source: 'vocals' })}
+                  title="Visualize vocal track only"
+                >
+                  🎤 Vocals
+                </button>
+              </div>
+
+              <button
+                class="btn btn-primary btn-sm ml-auto"
+                onClick={() => setIsEditingVis(false)}
+              >
+                ✓ Done Editing
+              </button>
+            </div>
+
+            {/* Sub row: presets and numeric coordinates */}
+            <div class="sim-vis-toolbar-row sub-row">
+              <span class="text-muted text-xs">Presets:</span>
+              <div class="btn-group">
+                <For each={POSITION_PRESETS}>
+                  {(p) => (
+                    <button
+                      class="btn btn-sm btn-ghost"
+                      onClick={() => store.updateVisualizer({ x: p.x, y: p.y, width: p.width, height: p.height, ...(p.type ? { type: p.type } : {}) })}
+                      title={p.desc}
+                    >
+                      {p.name}
+                    </button>
+                  )}
+                </For>
+              </div>
+
+              <div class="sim-vis-numeric-inputs">
+                <span class="text-xs text-muted">X:</span>
+                <input
+                  type="number"
+                  class="sim-vis-num-input"
+                  value={vis().x}
+                  onInput={(e) => store.updateVisualizer({ x: parseInt(e.currentTarget.value, 10) || 0 })}
+                />
+                <span class="text-xs text-muted">Y:</span>
+                <input
+                  type="number"
+                  class="sim-vis-num-input"
+                  value={vis().y}
+                  onInput={(e) => store.updateVisualizer({ y: parseInt(e.currentTarget.value, 10) || 0 })}
+                />
+                <span class="text-xs text-muted">W:</span>
+                <input
+                  type="number"
+                  class="sim-vis-num-input"
+                  value={vis().width}
+                  onInput={(e) => store.updateVisualizer({ width: parseInt(e.currentTarget.value, 10) || 80 })}
+                />
+                <span class="text-xs text-muted">H:</span>
+                <input
+                  type="number"
+                  class="sim-vis-num-input"
+                  value={vis().height}
+                  onInput={(e) => store.updateVisualizer({ height: parseInt(e.currentTarget.value, 10) || 30 })}
+                />
+                <button
+                  class="btn btn-xs btn-secondary"
+                  onClick={() => store.updateVisualizer({ x: Math.round((1920 - vis().width) / 2) })}
+                  title="Center horizontally"
+                >
+                  ⬌ Center X
+                </button>
+                <button
+                  class="btn btn-xs btn-secondary"
+                  onClick={() => store.updateVisualizer({ y: Math.round((1080 - vis().height) / 2) })}
+                  title="Center vertically"
+                >
+                  ⬍ Center Y
+                </button>
+              </div>
+            </div>
+          </div>
+        </Show>
       </Show>
 
       <Show when={!showHud()}>
@@ -663,6 +1026,63 @@ export const DetachedStageWindow: Component = () => {
                 <strong>{nextWin().columns.map((c) => c.token.text).join(' ')}</strong>
               </div>
             )}
+          </Show>
+
+          {/* Layer 2.5: Audio Visualizer Layer (Interactive Drag & Resize on 1080p Canvas) */}
+          <Show when={vis().enabled || isEditingVis()}>
+            <div
+              class={`sim-visualizer-container ${isEditingVis() ? 'is-editing' : ''}`}
+              style={{
+                position: 'absolute',
+                left: `${vis().x}px`,
+                top: `${vis().y}px`,
+                width: `${vis().width}px`,
+                height: `${vis().height}px`,
+                opacity: vis().opacity ?? 0.85,
+                'pointer-events': isEditingVis() ? 'auto' : 'none',
+                cursor: isEditingVis() ? 'move' : 'default',
+                'z-index': 15,
+              }}
+              onMouseDown={handleVisMouseDown}
+            >
+              <AudioVisualizerCanvas
+                config={vis()}
+                audioElement={visAudioEl()}
+                isPlaying={store.isPlaying()}
+              />
+
+              {/* Interactive Bounding Box and Resize Handles in Edit Mode */}
+              <Show when={isEditingVis()}>
+                <div class="sim-vis-edit-box">
+                  <div class="sim-vis-badge">
+                    📍 {vis().type.toUpperCase()} • X:{vis().x} Y:{vis().y} | {vis().width}×{vis().height} px
+                  </div>
+                  <div class="sim-vis-drag-cue">✥ Drag to move</div>
+
+                  {/* 8 resize handles */}
+                  <div class="vis-handle handle-nw" onMouseDown={(e) => handleResizeMouseDown(e, 'nw')} />
+                  <div class="vis-handle handle-n"  onMouseDown={(e) => handleResizeMouseDown(e, 'n')} />
+                  <div class="vis-handle handle-ne" onMouseDown={(e) => handleResizeMouseDown(e, 'ne')} />
+                  <div class="vis-handle handle-e"  onMouseDown={(e) => handleResizeMouseDown(e, 'e')} />
+                  <div class="vis-handle handle-se" onMouseDown={(e) => handleResizeMouseDown(e, 'se')} />
+                  <div class="vis-handle handle-s"  onMouseDown={(e) => handleResizeMouseDown(e, 's')} />
+                  <div class="vis-handle handle-sw" onMouseDown={(e) => handleResizeMouseDown(e, 'sw')} />
+                  <div class="vis-handle handle-w"  onMouseDown={(e) => handleResizeMouseDown(e, 'w')} />
+                </div>
+              </Show>
+            </div>
+          </Show>
+
+          {/* Snap alignment guides */}
+          <Show when={snapGuideX() !== null}>
+            <div class="sim-snap-guide-x" style={{ left: `${snapGuideX()}px` }}>
+              <span>Center X (960px)</span>
+            </div>
+          </Show>
+          <Show when={snapGuideY() !== null}>
+            <div class="sim-snap-guide-y" style={{ top: `${snapGuideY()}px` }}>
+              <span>Center Y (540px)</span>
+            </div>
           </Show>
 
           {/* Layer 3: Backing Vocals Track (ASS bottom-right, margin_bottom=120, margin_right=80) */}

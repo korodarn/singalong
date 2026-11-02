@@ -1,6 +1,7 @@
 import { Component, For, Show, createEffect, createSignal, onMount } from 'solid-js';
 import { store, fmtMs } from '../state/store';
 import { Token } from '../types';
+import { AudioVisualizerCanvas } from './AudioVisualizerCanvas';
 
 export const KaraokeStage: Component<{
   onPlayBounds: (startMs: number, endMs?: number) => void;
@@ -194,6 +195,13 @@ export const KaraokeStage: Component<{
                     : '🎬 Set Background'}
                 </button>
                 <button
+                  class={`stage-bg-btn ${meta()?.visualizer?.enabled ? 'active' : ''}`}
+                  onClick={() => store.setShowVisualizerModal(true)}
+                  title="Configure Audio Visualizer (Waveform, Bars, Lines, etc.)"
+                >
+                  {meta()?.visualizer?.enabled ? `🎵 Vis: ${meta()!.visualizer!.type.toUpperCase()}` : '🎵 Visualizer'}
+                </button>
+                <button
                   class="stage-bg-btn stage-popout-btn"
                   onClick={() => store.openStagePopupWindow()}
                   title="Detach a 16:9 1920x1080 Video Render Simulator in a separate window"
@@ -210,6 +218,27 @@ export const KaraokeStage: Component<{
 
 
         <div class="stage-viewport">
+          {/* Subtle live visualizer preview if enabled */}
+          <Show when={meta()?.visualizer?.enabled}>
+            <div
+              class="stage-mini-visualizer"
+              style={{
+                position: 'absolute',
+                bottom: '4px',
+                left: '8%',
+                width: '84%',
+                height: '38px',
+                opacity: (meta()!.visualizer!.opacity ?? 0.85) * 0.75,
+                'pointer-events': 'none',
+                'z-index': 1,
+              }}
+            >
+              <AudioVisualizerCanvas
+                config={meta()!.visualizer!}
+                isPlaying={store.isPlaying()}
+              />
+            </div>
+          </Show>
           <Show when={currentLine()} fallback={<div class="stage-placeholder">No line selected or project empty</div>}>
             {(line) => {
               const isFirstLine = () => store.activeLineIdx() === 0;

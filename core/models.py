@@ -44,4 +44,5 @@ class ProjectMeta:
     tier_mode: str = "multi_tier"
     asr_engine: str = "auto"
     target_lang: str = "auto"
+    visualizer: Optional[dict] = None
 

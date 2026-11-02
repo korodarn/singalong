@@ -77,6 +77,25 @@ export const RenderModal: Component = () => {
                 </button>
               </div>
 
+              <div class="render-bg-info" style={{ display: 'flex', 'align-items': 'center', gap: '8px', padding: '8px 12px', background: 'var(--bg-card)', 'border-radius': '6px', 'font-size': '12px', border: '1px solid var(--border)', 'margin-top': '6px' }}>
+                <span>🎵 Visualizer: </span>
+                <span class="font-mono" style={{ color: 'var(--accent-lead)' }}>
+                  {store.projectData()?.metadata?.visualizer?.enabled
+                    ? `${store.projectData()!.metadata!.visualizer!.type.toUpperCase()} (${store.projectData()!.metadata!.visualizer!.color}) @ [${store.projectData()!.metadata!.visualizer!.x}, ${store.projectData()!.metadata!.visualizer!.y}] ${store.projectData()!.metadata!.visualizer!.width}×${store.projectData()!.metadata!.visualizer!.height}`
+                    : 'None / Disabled'}
+                </span>
+                <button
+                  class="btn btn-sm"
+                  style={{ 'margin-left': 'auto', padding: '2px 8px', 'font-size': '11px' }}
+                  onClick={() => {
+                    store.setShowRenderModal(false);
+                    store.setShowVisualizerModal(true);
+                  }}
+                >
+                  Configure Vis...
+                </button>
+              </div>
+
               <label class="form-label">
                 Render Duration:
                 <select

@@ -114,6 +114,19 @@ export interface ProjectConfig {
   };
 }
 
+export interface VisualizerConfig {
+  enabled: boolean;
+  type: 'bars' | 'waveform' | 'line' | 'p2p' | 'circle' | 'volume';
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: string;
+  opacity: number;
+  audio_source?: 'mix' | 'vocals';
+  mirror?: boolean;
+}
+
 export interface ProjectMetadata {
   video_id: string;
   title: string;
@@ -130,6 +143,7 @@ export interface ProjectMetadata {
   bg_stream_url?: string | null;
   asr_engine?: string;
   target_lang?: string;
+  visualizer?: VisualizerConfig | null;
 }
 
 export interface ProjectData {

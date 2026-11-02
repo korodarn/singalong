@@ -10,6 +10,7 @@ import { CommentModal } from './components/CommentModal';
 import { IngestModal } from './components/IngestModal';
 import { RenderModal } from './components/RenderModal';
 import { VideoBgModal } from './components/VideoBgModal';
+import { VisualizerModal } from './components/VisualizerModal';
 import { DetachedStageWindow } from './components/DetachedStageWindow';
 import './style.css';
 
@@ -63,6 +64,7 @@ const App: Component = () => {
       <IngestModal />
       <RenderModal />
       <VideoBgModal />
+      <VisualizerModal />
 
       {/* Toast Notifications */}
       <div class="toast-container">

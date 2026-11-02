@@ -233,6 +233,14 @@ export const HeaderBar: Component<{ onSelectAndSeekLine?: (idx: number) => void 
           </button>
 
           <button
+            class={`btn ${store.projectData()?.metadata?.visualizer?.enabled ? 'btn-primary' : ''}`}
+            onClick={() => store.setShowVisualizerModal(true)}
+            title="Configure audio visualizer overlay (Waveform, Bars, Lines, etc.)"
+          >
+            🎵 Visualizer
+          </button>
+
+          <button
             class="btn"
             onClick={openRealignCurrent}
             title="Re-run singalong.py alignment or change lyrics query/drop-in"

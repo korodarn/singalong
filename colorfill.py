@@ -52,10 +52,14 @@ def main():
     bg_offset_ms = args.bg_offset
     bg_dim_pct = args.bg_dim
 
+    visualizer_cfg = None
+    vocals_path = None
+
     meta_path = workdir / f"{stem}.meta.json"
     if meta_path.exists():
         try:
             meta_data = json.loads(meta_path.read_text(encoding="utf-8"))
+            visualizer_cfg = meta_data.get("visualizer")
             if meta_tier_mode is None:
                 meta_tier_mode = meta_data.get("tier_mode")
             if bg_video_path is None:
@@ -72,6 +76,10 @@ def main():
                 bg_dim_pct = meta_data.get("bg_dim_pct", 35)
         except Exception:
             pass
+
+    cand_vocals = workdir / "htdemucs" / stem / "vocals.wav"
+    if cand_vocals.exists():
+        vocals_path = cand_vocals
 
     if bg_offset_ms is None:
         bg_offset_ms = 0
@@ -106,6 +114,8 @@ def main():
         preview_sec=args.preview,
         bg_dim_pct=bg_dim_pct,
         bg_offset_ms=bg_offset_ms,
+        visualizer_cfg=visualizer_cfg,
+        vocals_path=vocals_path,
     )
 
 

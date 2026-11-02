@@ -444,6 +444,9 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
                     current["bg_dim_pct"] = int(payload["bg_dim_pct"])
                 except (ValueError, TypeError):
                     current["bg_dim_pct"] = 35
+            if "visualizer" in payload:
+                val = payload["visualizer"]
+                current["visualizer"] = val if isinstance(val, dict) else None
 
             meta_path.write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
 

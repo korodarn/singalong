@@ -461,6 +461,27 @@ def generate_ass(lines: list, cfg: dict, ass_path: Path, tier_mode: str | int | 
     return ass_path
 
 
+def hex_to_rgb(hex_str: str) -> tuple[int, int, int]:
+    s = hex_str.strip().lstrip("#")
+    if len(s) == 3:
+        s = "".join([c * 2 for c in s])
+    if len(s) >= 6:
+        try:
+            return int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16)
+        except ValueError:
+            pass
+    return 255, 215, 0
+
+
+def format_ffmpeg_color(hex_str: str) -> str:
+    s = hex_str.strip().lstrip("#")
+    if len(s) == 3:
+        s = "".join([c * 2 for c in s])
+    if len(s) >= 6:
+        return f"0x{s[0:6].upper()}"
+    return "0xFFD700"
+
+
 def render_video(
     ass_path: Path,
     output_path: Path,
@@ -470,6 +491,8 @@ def render_video(
     preview_sec: float | None = None,
     bg_dim_pct: int = 35,
     bg_offset_ms: int = 0,
+    visualizer_cfg: dict | None = None,
+    vocals_path: Path | None = None,
 ):
     from core.media import detect_media_type
 
@@ -487,6 +510,14 @@ def render_video(
 
     escaped_ass = str(ass_path).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
 
+    vis_enabled = bool(visualizer_cfg and visualizer_cfg.get("enabled", False) and has_audio)
+    vis_audio_idx = 1
+    extra_vocals_input = False
+
+    if vis_enabled and visualizer_cfg.get("audio_source") == "vocals" and vocals_path and vocals_path.exists():
+        if not audio_path or vocals_path.resolve() != audio_path.resolve():
+            extra_vocals_input = True
+
     if video_bg_path and video_bg_path.exists():
         m_type = detect_media_type(video_bg_path)
         print(f"[*] Using {m_type} background: {video_bg_path}")
@@ -501,6 +532,11 @@ def render_video(
             print(f"[*] Using audio source: {audio_path}")
             cmd.extend(["-i", str(audio_path)])
 
+        if extra_vocals_input:
+            print(f"[*] Using isolated vocals for visualizer: {vocals_path}")
+            cmd.extend(["-i", str(vocals_path)])
+            vis_audio_idx = 2
+
         filters = [f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"]
         if m_type == "video" and bg_offset_ms < 0:
             delay_ms = abs(int(bg_offset_ms))
@@ -508,10 +544,54 @@ def render_video(
         if bg_dim_pct > 0:
             dim_alpha = max(0.0, min(1.0, bg_dim_pct / 100.0))
             filters.append(f"drawbox=x=0:y=0:w=iw:h=ih:color=black@{dim_alpha:.2f}:t=fill")
-        filters.append(f"ass='{escaped_ass}'")
-        filter_str = ",".join(filters)
+        bg_pipe = ",".join(filters)
 
-        cmd.extend(["-filter_complex", f"[0:v]{filter_str}[v]", "-map", "[v]"])
+        if vis_enabled:
+            vis_type = visualizer_cfg.get("type", "bars")
+            vis_x = int(visualizer_cfg.get("x", 260))
+            vis_y = int(visualizer_cfg.get("y", 780))
+            vis_w = int(visualizer_cfg.get("width", 1400))
+            vis_h = int(visualizer_cfg.get("height", 160))
+            vis_w = max(32, vis_w - (vis_w % 2))
+            vis_h = max(32, vis_h - (vis_h % 2))
+            vis_x = max(0, min(width - 32, vis_x))
+            vis_y = max(0, min(height - 32, vis_y))
+
+            raw_color = visualizer_cfg.get("color", "#FFD700")
+            vis_color = format_ffmpeg_color(raw_color)
+            opacity = max(0.05, min(1.0, float(visualizer_cfg.get("opacity", 0.85))))
+
+            if vis_type == "bars":
+                vis_filter = f"[{vis_audio_idx}:a]showfreqs=s={vis_w}x{vis_h}:mode=bar:ascale=log:fscale=log:colors={vis_color}:win_size=2048:overlap=0.8[vis_raw]"
+            elif vis_type == "waveform":
+                vis_filter = f"[{vis_audio_idx}:a]showwaves=s={vis_w}x{vis_h}:mode=cline:colors={vis_color}:scale=cbrt:draw=full[vis_raw]"
+            elif vis_type == "line":
+                vis_filter = f"[{vis_audio_idx}:a]showwaves=s={vis_w}x{vis_h}:mode=line:colors={vis_color}:scale=lin:draw=full[vis_raw]"
+            elif vis_type == "p2p":
+                vis_filter = f"[{vis_audio_idx}:a]showwaves=s={vis_w}x{vis_h}:mode=p2p:colors={vis_color}:scale=cbrt:draw=full[vis_raw]"
+            elif vis_type == "circle":
+                sq = max(64, min(vis_w, vis_h))
+                sq = sq - (sq % 2)
+                r_c, g_c, b_c = hex_to_rgb(raw_color)
+                vis_filter = f"[{vis_audio_idx}:a]avectorscope=s={sq}x{sq}:m=lissajous:draw=line:rc={r_c}:gc={g_c}:bc={b_c}[vis_raw]"
+            elif vis_type == "volume":
+                chan_h = max(8, min(400, vis_h // 2))
+                vis_filter = f"[{vis_audio_idx}:a]showvolume=w={vis_w}:h={chan_h}:f=0:p=0:t=0:v=0[vis_raw]"
+            else:
+                vis_filter = f"[{vis_audio_idx}:a]showfreqs=s={vis_w}x{vis_h}:mode=bar:ascale=log:fscale=log:colors={vis_color}:win_size=2048:overlap=0.8[vis_raw]"
+
+            trans_filter = f"[vis_raw]format=rgba,colorkey=0x000000:0.1:0.1,colorchannelmixer=aa={opacity:.2f}[vis]"
+            fc = (
+                f"[0:v]{bg_pipe}[v_bg];"
+                f"{vis_filter};"
+                f"{trans_filter};"
+                f"[v_bg][vis]overlay=x={vis_x}:y={vis_y}:shortest=1[v_vis];"
+                f"[v_vis]ass='{escaped_ass}'[v]"
+            )
+        else:
+            fc = f"[0:v]{bg_pipe},ass='{escaped_ass}'[v]"
+
+        cmd.extend(["-filter_complex", fc, "-map", "[v]"])
         if has_audio:
             cmd.extend(["-map", "1:a:0"])
     else:
@@ -529,7 +609,59 @@ def render_video(
             print(f"[*] Using audio source: {audio_path}")
             cmd.extend(["-i", str(audio_path)])
 
-        cmd.extend(["-vf", f"ass='{escaped_ass}'"])
+        if extra_vocals_input:
+            print(f"[*] Using isolated vocals for visualizer: {vocals_path}")
+            cmd.extend(["-i", str(vocals_path)])
+            vis_audio_idx = 2
+
+        if vis_enabled:
+            vis_type = visualizer_cfg.get("type", "bars")
+            vis_x = int(visualizer_cfg.get("x", 260))
+            vis_y = int(visualizer_cfg.get("y", 780))
+            vis_w = int(visualizer_cfg.get("width", 1400))
+            vis_h = int(visualizer_cfg.get("height", 160))
+            vis_w = max(32, vis_w - (vis_w % 2))
+            vis_h = max(32, vis_h - (vis_h % 2))
+            vis_x = max(0, min(width - 32, vis_x))
+            vis_y = max(0, min(height - 32, vis_y))
+
+            raw_color = visualizer_cfg.get("color", "#FFD700")
+            vis_color = format_ffmpeg_color(raw_color)
+            opacity = max(0.05, min(1.0, float(visualizer_cfg.get("opacity", 0.85))))
+
+            if vis_type == "bars":
+                vis_filter = f"[{vis_audio_idx}:a]showfreqs=s={vis_w}x{vis_h}:mode=bar:ascale=log:fscale=log:colors={vis_color}:win_size=2048:overlap=0.8[vis_raw]"
+            elif vis_type == "waveform":
+                vis_filter = f"[{vis_audio_idx}:a]showwaves=s={vis_w}x{vis_h}:mode=cline:colors={vis_color}:scale=cbrt:draw=full[vis_raw]"
+            elif vis_type == "line":
+                vis_filter = f"[{vis_audio_idx}:a]showwaves=s={vis_w}x{vis_h}:mode=line:colors={vis_color}:scale=lin:draw=full[vis_raw]"
+            elif vis_type == "p2p":
+                vis_filter = f"[{vis_audio_idx}:a]showwaves=s={vis_w}x{vis_h}:mode=p2p:colors={vis_color}:scale=cbrt:draw=full[vis_raw]"
+            elif vis_type == "circle":
+                sq = max(64, min(vis_w, vis_h))
+                sq = sq - (sq % 2)
+                r_c, g_c, b_c = hex_to_rgb(raw_color)
+                vis_filter = f"[{vis_audio_idx}:a]avectorscope=s={sq}x{sq}:m=lissajous:draw=line:rc={r_c}:gc={g_c}:bc={b_c}[vis_raw]"
+            elif vis_type == "volume":
+                chan_h = max(8, min(400, vis_h // 2))
+                vis_filter = f"[{vis_audio_idx}:a]showvolume=w={vis_w}:h={chan_h}:f=0:p=0:t=0:v=0[vis_raw]"
+            else:
+                vis_filter = f"[{vis_audio_idx}:a]showfreqs=s={vis_w}x{vis_h}:mode=bar:ascale=log:fscale=log:colors={vis_color}:win_size=2048:overlap=0.8[vis_raw]"
+
+            trans_filter = f"[vis_raw]format=rgba,colorkey=0x000000:0.1:0.1,colorchannelmixer=aa={opacity:.2f}[vis]"
+            fc = (
+                f"{vis_filter};"
+                f"{trans_filter};"
+                f"[0:v][vis]overlay=x={vis_x}:y={vis_y}:shortest=1[v_vis];"
+                f"[v_vis]ass='{escaped_ass}'[v]"
+            )
+            cmd.extend(["-filter_complex", fc, "-map", "[v]"])
+            if has_audio:
+                cmd.extend(["-map", "1:a:0"])
+        else:
+            cmd.extend(["-vf", f"ass='{escaped_ass}'"])
+            if has_audio:
+                cmd.extend(["-map", "0:v", "-map", "1:a:0"])
 
     if preview_sec:
         cmd.extend(["-t", str(preview_sec)])
