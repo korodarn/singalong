@@ -28,6 +28,33 @@ export function fmtMs(ms: number): string {
   return `${String(m).padStart(2, '0')}:${s.toFixed(2).padStart(5, '0')}`;
 }
 
+export function parseTimeToMs(input: string): number | null {
+  if (!input) return null;
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+
+  if (trimmed.includes(':')) {
+    const parts = trimmed.split(':').map((p) => p.trim());
+    if (parts.length === 2) {
+      const m = parseFloat(parts[0]);
+      const s = parseFloat(parts[1]);
+      if (isNaN(m) || isNaN(s) || m < 0 || s < 0) return null;
+      return Math.round((m * 60 + s) * 1000);
+    } else if (parts.length === 3) {
+      const h = parseFloat(parts[0]);
+      const m = parseFloat(parts[1]);
+      const s = parseFloat(parts[2]);
+      if (isNaN(h) || isNaN(m) || isNaN(s) || h < 0 || m < 0 || s < 0) return null;
+      return Math.round((h * 3600 + m * 60 + s) * 1000);
+    }
+    return null;
+  }
+
+  const num = parseFloat(trimmed);
+  if (isNaN(num) || num < 0) return null;
+  return Math.round(num * 1000);
+}
+
 function recalcLineBounds(ln: Line) {
   if (!ln || !ln.tokens) return;
   const active = ln.tokens.filter((t) => !t.is_deleted);
@@ -170,11 +197,12 @@ function createAppStore() {
             }
           }
         } else if (msg.type === 'cmd_visualizer' && msg.visualizer !== undefined) {
-          if (projectData()) {
+          const cur = projectData();
+          if (cur && cur.metadata) {
             setProjectData({
-              ...projectData()!,
+              ...cur,
               metadata: {
-                ...projectData()!.metadata,
+                ...cur.metadata,
                 visualizer: msg.visualizer,
               },
             });
@@ -198,11 +226,12 @@ function createAppStore() {
         } else if (msg.type === 'cmd_dim' && typeof msg.bg_dim_pct === 'number') {
           updateBgMeta({ bg_dim_pct: msg.bg_dim_pct }).catch(() => {});
         } else if (msg.type === 'cmd_visualizer' && msg.visualizer !== undefined) {
-          if (projectData()) {
+          const cur = projectData();
+          if (cur && cur.metadata) {
             setProjectData({
-              ...projectData()!,
+              ...cur,
               metadata: {
-                ...projectData()!.metadata,
+                ...cur.metadata,
                 visualizer: msg.visualizer,
               },
             });
@@ -436,11 +465,12 @@ function createAppStore() {
       ...currentVis,
       ...visUpdate,
     };
-    if (projectData()) {
+    const cur = projectData();
+    if (cur && cur.metadata) {
       setProjectData({
-        ...projectData()!,
+        ...cur,
         metadata: {
-          ...projectData()!.metadata,
+          ...cur.metadata,
           visualizer: merged,
         },
       });

@@ -1,4 +1,4 @@
-import { Component, For, onMount } from 'solid-js';
+import { Component, For, Show, onMount } from 'solid-js';
 import { render } from 'solid-js/web';
 import { store } from './state/store';
 import { HeaderBar } from './components/HeaderBar';

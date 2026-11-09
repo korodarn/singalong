@@ -2,7 +2,7 @@ import { Component, Show, createEffect, createSignal, onCleanup, onMount } from 
 import WaveSurfer from 'wavesurfer.js';
 // @ts-ignore
 import RegionsPlugin from 'wavesurfer.js/dist/plugins/regions.esm.js';
-import { store, fmtMs } from '../state/store';
+import { store, fmtMs, parseTimeToMs } from '../state/store';
 
 export const WaveformPane: Component<{
   onRegisterControls: (controls: {
@@ -20,6 +20,40 @@ export const WaveformPane: Component<{
   const regionMap = new Map<string, { lineIdx: number; tokenIdx: number }>();
 
   const [waveHeight, setWaveHeight] = createSignal<number>(100);
+  const [isEditingTime, setIsEditingTime] = createSignal<boolean>(false);
+  const [timeInputVal, setTimeInputVal] = createSignal<string>('');
+
+  const startEditingTime = () => {
+    setTimeInputVal(fmtMs(store.currentTimeMs()));
+    setIsEditingTime(true);
+  };
+
+  const cancelEditingTime = () => {
+    setIsEditingTime(false);
+  };
+
+  const commitTimeInput = () => {
+    if (!isEditingTime()) return;
+    const val = timeInputVal().trim();
+    setIsEditingTime(false);
+    if (!val) return;
+    const ms = parseTimeToMs(val);
+    if (ms !== null) {
+      const maxMs = store.totalDurationMs() > 0 ? store.totalDurationMs() : ms;
+      seekToMs(Math.max(0, Math.min(maxMs, ms)));
+    }
+  };
+
+  const handleTimeInputKeyDown = (e: KeyboardEvent) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commitTimeInput();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancelEditingTime();
+    }
+  };
 
   const seekToMs = (ms: number) => {
     if (!ws || !isWaveReady) return;
@@ -419,6 +453,9 @@ export const WaveformPane: Component<{
       } else if (e.key === 'l' || e.key === 'L') {
         e.preventDefault();
         seekRelative(3);
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        seekToMs(0);
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         if (store.activeLineIdx() > 0) {
@@ -542,8 +579,52 @@ export const WaveformPane: Component<{
             </button>
           </div>
 
-          <div class="time-readout">
-            <span class="current">{fmtMs(store.currentTimeMs())}</span> / <span>{fmtMs(store.totalDurationMs())}</span>
+          <div class="time-readout-wrap">
+            <button
+              class="btn btn-restart"
+              onClick={() => seekToMs(0)}
+              title="Restart from beginning (00:00.00) (Home)"
+            >
+              ⏮ Reset
+            </button>
+            <div class="time-readout">
+              <Show
+                when={isEditingTime()}
+                fallback={
+                  <span
+                    class="current time-editable"
+                    onClick={startEditingTime}
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        startEditingTime();
+                      }
+                    }}
+                    title="Click to edit current position (e.g. 01:23.45), press Enter to jump"
+                  >
+                    {fmtMs(store.currentTimeMs())}
+                  </span>
+                }
+              >
+                <input
+                  ref={(el) => {
+                    setTimeout(() => {
+                      el.focus();
+                      el.select();
+                    }, 20);
+                  }}
+                  type="text"
+                  class="time-edit-input"
+                  value={timeInputVal()}
+                  onInput={(e) => setTimeInputVal(e.currentTarget.value)}
+                  onKeyDown={handleTimeInputKeyDown}
+                  onBlur={commitTimeInput}
+                  title="Enter time (e.g. 01:23.45, 1:23, or 45), press Enter to seek"
+                />
+              </Show>
+              {' '} / <span>{fmtMs(store.totalDurationMs())}</span>
+            </div>
           </div>
 
           <div class="kb-hints">

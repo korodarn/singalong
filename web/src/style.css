@@ -536,7 +536,37 @@ button.btn-danger:hover:not(:disabled) { background: var(--accent-danger); color
   flex-wrap: wrap;
 }
 
+.time-readout-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-restart {
+  background: var(--bg-darkest);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-normal);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 9px;
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-restart:hover {
+  background: var(--bg-panel);
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
 .time-readout {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-muted);
@@ -548,6 +578,36 @@ button.btn-danger:hover:not(:disabled) { background: var(--accent-danger); color
 .time-readout .current {
   color: var(--accent-lead);
   font-weight: 700;
+}
+.time-readout .time-editable,
+.sim-timecode .time-editable {
+  cursor: pointer;
+  border-bottom: 1px dashed rgba(255, 215, 0, 0.4);
+  padding: 0 2px;
+  border-radius: 2px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.time-readout .time-editable:hover,
+.time-readout .time-editable:focus,
+.sim-timecode .time-editable:hover,
+.sim-timecode .time-editable:focus {
+  background: rgba(255, 215, 0, 0.15);
+  border-bottom: 1px solid var(--accent-lead);
+  outline: none;
+}
+.time-readout .time-edit-input,
+.sim-timecode .time-edit-input {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent-lead);
+  background: var(--bg-panel);
+  border: 1px solid var(--accent-primary);
+  border-radius: 3px;
+  padding: 1px 4px;
+  width: 72px;
+  outline: none;
+  box-shadow: 0 0 4px rgba(255, 215, 0, 0.3);
 }
 
 .kb-hints {

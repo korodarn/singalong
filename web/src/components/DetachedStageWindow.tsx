@@ -1,5 +1,5 @@
 import { Component, For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
-import { store, fmtMs, DEFAULT_VISUALIZER } from '../state/store';
+import { store, fmtMs, parseTimeToMs, DEFAULT_VISUALIZER } from '../state/store';
 import { Line, Token, VisualizerConfig } from '../types';
 import { AudioVisualizerCanvas } from './AudioVisualizerCanvas';
 
@@ -282,6 +282,9 @@ export const DetachedStageWindow: Component = () => {
       } else if (e.key === 'l' || e.key === 'L' || e.key === 'ArrowRight') {
         e.preventDefault();
         handleSeekRel(3);
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        handleSeekMs(0);
       } else if (e.key === 'f' || e.key === 'F') {
         e.preventDefault();
         toggleFullscreen();
@@ -564,6 +567,40 @@ export const DetachedStageWindow: Component = () => {
     store.sendStageCommand({ type: 'cmd_toggle_play' });
   };
 
+  const [isEditingTime, setIsEditingTime] = createSignal<boolean>(false);
+  const [timeInputVal, setTimeInputVal] = createSignal<string>('');
+
+  const startEditingTime = () => {
+    setTimeInputVal(fmtMs(store.currentTimeMs()));
+    setIsEditingTime(true);
+  };
+
+  const cancelEditingTime = () => {
+    setIsEditingTime(false);
+  };
+
+  const commitTimeInput = () => {
+    if (!isEditingTime()) return;
+    const val = timeInputVal().trim();
+    setIsEditingTime(false);
+    if (!val) return;
+    const ms = parseTimeToMs(val);
+    if (ms !== null) {
+      handleSeekMs(ms);
+    }
+  };
+
+  const handleTimeInputKeyDown = (e: KeyboardEvent) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commitTimeInput();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancelEditingTime();
+    }
+  };
+
   const handleSeekMs = (ms: number) => {
     const clamped = Math.max(0, Math.min(store.totalDurationMs() || 300000, ms));
     store.setCurrentTimeMs(clamped);
@@ -712,7 +749,7 @@ export const DetachedStageWindow: Component = () => {
         <audio
           ref={(el) => setVisAudioEl(el)}
           src={
-            vis().audio_source === 'vocals' && store.projectData()?.has_vocals
+            localVis().audio_source === 'vocals' && store.projectData()?.has_vocals
               ? `/api/audio/${encodeURIComponent(store.currentVid())}/vocals`
               : `/api/audio/${encodeURIComponent(store.currentVid())}/mix`
           }
@@ -1207,8 +1244,46 @@ export const DetachedStageWindow: Component = () => {
             <button class="btn btn-sm" onClick={() => handleSeekRel(3)} title="Forward 3s (L)">
               +3s ⏩
             </button>
+            <button class="btn btn-sm btn-restart" onClick={() => handleSeekMs(0)} title="Restart from beginning (00:00.00) (Home)">
+              ⏮ Reset
+            </button>
             <span class="sim-timecode">
-              <strong>{fmtMs(store.currentTimeMs())}</strong> / {fmtMs(store.totalDurationMs())}
+              <Show
+                when={isEditingTime()}
+                fallback={
+                  <strong
+                    class="time-editable"
+                    onClick={startEditingTime}
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        startEditingTime();
+                      }
+                    }}
+                    title="Click to edit current position, press Enter to jump"
+                  >
+                    {fmtMs(store.currentTimeMs())}
+                  </strong>
+                }
+              >
+                <input
+                  ref={(el) => {
+                    setTimeout(() => {
+                      el.focus();
+                      el.select();
+                    }, 20);
+                  }}
+                  type="text"
+                  class="time-edit-input"
+                  value={timeInputVal()}
+                  onInput={(e) => setTimeInputVal(e.currentTarget.value)}
+                  onKeyDown={handleTimeInputKeyDown}
+                  onBlur={commitTimeInput}
+                  title="Enter time (e.g. 01:23.45, 1:23, or 45), press Enter to seek"
+                />
+              </Show>
+              {' '} / {fmtMs(store.totalDurationMs())}
             </span>
           </div>
 

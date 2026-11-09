@@ -91,8 +91,8 @@ export const AudioVisualizerCanvas: Component<{
       if (analyser && playing) {
         freqData = new Uint8Array(analyser.frequencyBinCount);
         timeData = new Uint8Array(analyser.frequencyBinCount);
-        analyser.getByteFrequencyData(freqData);
-        analyser.getByteTimeDomainData(timeData);
+        analyser.getByteFrequencyData(freqData as any);
+        analyser.getByteTimeDomainData(timeData as any);
 
         for (let i = 0; i < 30; i++) {
           if (freqData[i] > 10) {
