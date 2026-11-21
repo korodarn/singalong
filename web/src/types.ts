@@ -160,6 +160,8 @@ export interface VisualizerConfig {
   opacity: number;
   audio_source?: 'mix' | 'vocals';
   mirror?: boolean;
+  direction?: 'up' | 'down' | 'center';
+  peaks?: boolean;
 }
 
 export interface ProjectMetadata {

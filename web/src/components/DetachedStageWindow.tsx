@@ -14,11 +14,21 @@ const COLOR_PRESETS = [
   { name: 'Amber Flame', hex: '#FF9F1C' },
 ];
 
-const POSITION_PRESETS: { name: string; desc: string; x: number; y: number; width: number; height: number; type?: VisualizerConfig['type'] }[] = [
-  { name: 'Above Lyrics', desc: 'Centered above subtitles (1400×160)', x: 260, y: 770, width: 1400, height: 160 },
-  { name: 'Bottom Strip', desc: 'Full width bottom bar (1920×80)', x: 0, y: 1000, width: 1920, height: 80 },
-  { name: 'Top Banner', desc: 'Full width top edge (1920×90)', x: 0, y: 0, width: 1920, height: 90 },
-  { name: 'Center Stage', desc: 'Center screen wave (1200×220)', x: 360, y: 430, width: 1200, height: 220 },
+const POSITION_PRESETS: {
+  name: string;
+  desc: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  type?: VisualizerConfig['type'];
+  direction?: VisualizerConfig['direction'];
+  mirror?: boolean;
+}[] = [
+  { name: 'Above Lyrics', desc: 'Centered above subtitles (1400×160)', x: 260, y: 770, width: 1400, height: 160, direction: 'up', mirror: false },
+  { name: 'Bottom Strip', desc: 'Full width bottom bar (1920×80)', x: 0, y: 1000, width: 1920, height: 80, direction: 'up', mirror: false },
+  { name: 'Top Banner', desc: 'Full width top edge (1920×90, hangs from top)', x: 0, y: 0, width: 1920, height: 90, direction: 'down', mirror: false },
+  { name: 'Center Stage', desc: 'Center screen wave (1200×220)', x: 360, y: 430, width: 1200, height: 220, direction: 'center', mirror: true },
   { name: 'Center Circle', desc: 'Radial circle scope (320×320)', x: 800, y: 380, width: 320, height: 320, type: 'circle' },
 ];
 
@@ -92,6 +102,8 @@ export const DetachedStageWindow: Component = () => {
       opacity: typeof raw?.opacity === 'number' && !isNaN(raw.opacity) ? raw.opacity : DEFAULT_VISUALIZER.opacity,
       audio_source: raw?.audio_source || DEFAULT_VISUALIZER.audio_source,
       mirror: raw?.mirror ?? DEFAULT_VISUALIZER.mirror,
+      direction: raw?.direction || (raw?.mirror ? 'center' : DEFAULT_VISUALIZER.direction),
+      peaks: raw?.peaks ?? DEFAULT_VISUALIZER.peaks,
     };
   };
 
@@ -811,6 +823,32 @@ export const DetachedStageWindow: Component = () => {
               🎵 Visualizer {localVis().enabled ? '(ON)' : ''}
             </button>
 
+            <Show when={localVis().enabled}>
+              <div class="btn-group" title="Visualizer Alignment: Push to Top / Mirrored Center / Hang from Top">
+                <button
+                  class={`btn-toggle btn-sm ${localVis().direction === 'up' ? 'active' : ''}`}
+                  onClick={() => updateVis({ direction: 'up', mirror: false })}
+                  title="Bottom-Up: Baseline at bottom, bars push to top"
+                >
+                  🔼 Push to Top
+                </button>
+                <button
+                  class={`btn-toggle btn-sm ${localVis().direction === 'center' ? 'active' : ''}`}
+                  onClick={() => updateVis({ direction: 'center', mirror: true })}
+                  title="Symmetrical: Mirrored vertically around center"
+                >
+                  ↕️ Center
+                </button>
+                <button
+                  class={`btn-toggle btn-sm ${localVis().direction === 'down' ? 'active' : ''}`}
+                  onClick={() => updateVis({ direction: 'down', mirror: false })}
+                  title="Top-Down: Baseline at top ceiling, bars hang downward"
+                >
+                  🔽 Hang from Top
+                </button>
+              </div>
+            </Show>
+
             <button
               class={`btn btn-sm ${showSafeGuides() ? 'btn-primary' : ''}`}
               onClick={() => setShowSafeGuides(!showSafeGuides())}
@@ -899,6 +937,44 @@ export const DetachedStageWindow: Component = () => {
                 </button>
               </div>
 
+              {/* Direction / Baseline Alignment */}
+              <div class="btn-group" title="Direction / Baseline Alignment">
+                <button
+                  class={`btn-toggle ${localVis().direction === 'up' ? 'active' : ''}`}
+                  onClick={() => updateVis({ direction: 'up', mirror: false })}
+                  title="Push to Top (Bottom-Up: baseline at bottom)"
+                >
+                  🔼 Push to Top
+                </button>
+                <button
+                  class={`btn-toggle ${localVis().direction === 'center' ? 'active' : ''}`}
+                  onClick={() => updateVis({ direction: 'center', mirror: true })}
+                  title="Mirrored Center (Symmetrical)"
+                >
+                  ↕️ Center
+                </button>
+                <button
+                  class={`btn-toggle ${localVis().direction === 'down' ? 'active' : ''}`}
+                  onClick={() => updateVis({ direction: 'down', mirror: false })}
+                  title="Hang from Top (Top-Down: baseline at top)"
+                >
+                  🔽 Hang from Top
+                </button>
+              </div>
+
+              {/* Peak Envelope Caps Toggle */}
+              <label class="toggle-control" title="Toggle dynamic floating peak hold caps">
+                <input
+                  type="checkbox"
+                  checked={localVis().peaks !== false}
+                  onChange={(e) => updateVis({ peaks: e.currentTarget.checked })}
+                />
+                <span class="toggle-slider" />
+                <span class="text-xs">
+                  {localVis().peaks !== false ? 'Peaks: ON' : 'Peaks: OFF'}
+                </span>
+              </label>
+
               {/* Color Swatches */}
               <div class="sim-vis-color-swatches">
                 <For each={COLOR_PRESETS}>
@@ -976,7 +1052,18 @@ export const DetachedStageWindow: Component = () => {
                   {(p) => (
                     <button
                       class="btn btn-sm btn-ghost"
-                      onClick={() => updateVis({ x: p.x, y: p.y, width: p.width, height: p.height, ...(p.type ? { type: p.type } : {}) })}
+                      onClick={() =>
+                        updateVis({
+                          x: p.x,
+                          y: p.y,
+                          width: p.width,
+                          height: p.height,
+                          ...(p.type ? { type: p.type } : {}),
+                          ...(p.direction
+                            ? { direction: p.direction, mirror: p.mirror ?? p.direction === 'center' }
+                            : {}),
+                        })
+                      }
                       title={p.desc}
                     >
                       {p.name}

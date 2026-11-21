@@ -67,6 +67,8 @@ export const AudioVisualizerCanvas: Component<{
     if (!ctx2d) return;
 
     let syntheticPhase = 0;
+    const peakValues: number[] = [];
+    const peakHoldTimes: number[] = [];
 
     const render = () => {
       animId = requestAnimationFrame(render);
@@ -82,7 +84,8 @@ export const AudioVisualizerCanvas: Component<{
       const cfg = props.config;
       const type = cfg.type || 'bars';
       const col = cfg.color || '#FFD700';
-      const mirror = cfg.mirror !== false;
+      const direction = cfg.direction || (cfg.mirror ? 'center' : 'up');
+      const showPeaks = cfg.peaks !== false;
 
       let freqData: Uint8Array | null = null;
       let timeData: Uint8Array | null = null;
@@ -104,10 +107,15 @@ export const AudioVisualizerCanvas: Component<{
 
       syntheticPhase += playing ? 0.08 : 0.02;
 
-      // Fallback synthetic wave generator for preview while paused or when audio is starting
+      // Sample generator with log frequency scaling to match FFmpeg's fscale=log
       const getSample = (idx: number, total: number) => {
         if (hasRealAudio && freqData && timeData) {
-          const binIdx = Math.floor((idx / total) * (freqData.length * 0.75));
+          const p = idx / total;
+          const logP = Math.pow(p, 1.55);
+          const binIdx = Math.min(
+            freqData.length - 1,
+            Math.floor(logP * (freqData.length * 0.72)) + 1
+          );
           const freqVal = freqData[binIdx] / 255.0;
           const timeVal = (timeData[binIdx] - 128) / 128.0;
           return { freq: freqVal, time: timeVal };
@@ -134,20 +142,52 @@ export const AudioVisualizerCanvas: Component<{
 
         for (let i = 0; i < numBars; i++) {
           const { freq } = getSample(i, numBars);
-          const barH = Math.max(4, freq * (h * 0.88));
+          const barH = Math.max(3, freq * (h * 0.88));
           const x = gap + i * (barWidth + gap);
 
-          if (mirror) {
+          // Update peak caps with gravity decay
+          if (peakValues[i] === undefined || barH >= peakValues[i]) {
+            peakValues[i] = barH;
+            peakHoldTimes[i] = 10;
+          } else {
+            if (peakHoldTimes[i] > 0) {
+              peakHoldTimes[i]--;
+            } else {
+              peakValues[i] = Math.max(3, peakValues[i] - 1.6);
+            }
+          }
+
+          if (direction === 'center') {
             const centerY = h / 2;
             const topY = centerY - barH / 2;
             ctx2d.beginPath();
-            ctx2d.roundRect(x, topY, barWidth, barH, [3]);
+            ctx2d.roundRect(x, topY, barWidth, barH, [2]);
             ctx2d.fill();
+
+            if (showPeaks) {
+              const halfPeak = peakValues[i] / 2;
+              ctx2d.fillRect(x, centerY - halfPeak, barWidth, 2);
+              ctx2d.fillRect(x, centerY + halfPeak - 2, barWidth, 2);
+            }
+          } else if (direction === 'down') {
+            // Baseline at top, bars hang downward
+            ctx2d.beginPath();
+            ctx2d.roundRect(x, 0, barWidth, barH, [0, 0, 2, 2]);
+            ctx2d.fill();
+
+            if (showPeaks) {
+              ctx2d.fillRect(x, Math.min(h - 2, peakValues[i]), barWidth, 2);
+            }
           } else {
+            // Up: Baseline at bottom, bars push upward to top
             const topY = h - barH;
             ctx2d.beginPath();
-            ctx2d.roundRect(x, topY, barWidth, barH, [3, 3, 0, 0]);
+            ctx2d.roundRect(x, topY, barWidth, barH, [2, 2, 0, 0]);
             ctx2d.fill();
+
+            if (showPeaks) {
+              ctx2d.fillRect(x, Math.max(0, h - peakValues[i]), barWidth, 2);
+            }
           }
         }
       } else if (type === 'waveform' || type === 'p2p') {
@@ -166,23 +206,40 @@ export const AudioVisualizerCanvas: Component<{
           const barW = Math.max(2, step * 0.65);
           for (let i = 0; i < count; i++) {
             const { freq } = getSample(i, count);
-            const halfH = Math.max(2, (freq * h) / 2);
+            const envH = Math.max(2, freq * (h * 0.9));
             const x = i * step;
+
             ctx2d.beginPath();
-            ctx2d.roundRect(x, centerY - halfH, barW, halfH * 2, [2]);
+            if (direction === 'center') {
+              const halfH = envH / 2;
+              ctx2d.roundRect(x, centerY - halfH, barW, envH, [1]);
+            } else if (direction === 'down') {
+              ctx2d.roundRect(x, 0, barW, envH, [0, 0, 1, 1]);
+            } else {
+              // Up: Push to top
+              ctx2d.roundRect(x, h - envH, barW, envH, [1, 1, 0, 0]);
+            }
             ctx2d.fill();
           }
         } else {
-          // Centered continuous oscillating waveform
+          // Continuous oscillating waveform
           ctx2d.beginPath();
-          ctx2d.moveTo(0, centerY);
+          const baseOffset = direction === 'down' ? 12 : direction === 'up' ? h - 12 : centerY;
+          ctx2d.moveTo(0, baseOffset);
           for (let i = 0; i <= count; i++) {
             const { time, freq } = getSample(i, count);
             const amp = Math.max(Math.abs(time), freq * 0.8);
-            const y = centerY + (i % 2 === 0 ? 1 : -1) * amp * (h * 0.45);
+            let y = centerY;
+            if (direction === 'down') {
+              y = 12 + amp * (h * 0.75);
+            } else if (direction === 'up') {
+              y = h - 12 - amp * (h * 0.75);
+            } else {
+              y = centerY + (i % 2 === 0 ? 1 : -1) * amp * (h * 0.45);
+            }
             ctx2d.lineTo(i * step, y);
           }
-          ctx2d.lineTo(w, centerY);
+          ctx2d.lineTo(w, baseOffset);
           ctx2d.stroke();
 
           // Subtle filled aura
@@ -204,9 +261,15 @@ export const AudioVisualizerCanvas: Component<{
         ctx2d.beginPath();
         for (let i = 0; i <= count; i++) {
           const { freq } = getSample(i, count);
-          const y = mirror
-            ? centerY - (freq - 0.5) * (h * 0.8)
-            : h - 6 - freq * (h * 0.85);
+          let y = centerY;
+          if (direction === 'center') {
+            y = centerY - (freq - 0.5) * (h * 0.8);
+          } else if (direction === 'down') {
+            y = 6 + freq * (h * 0.85);
+          } else {
+            // Up: Push to top
+            y = h - 6 - freq * (h * 0.85);
+          }
           if (i === 0) ctx2d.moveTo(0, y);
           else ctx2d.lineTo(i * step, y);
         }

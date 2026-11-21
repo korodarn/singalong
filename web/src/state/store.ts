@@ -12,7 +12,9 @@ export const DEFAULT_VISUALIZER: VisualizerConfig = {
   color: '#FFD700',
   opacity: 0.85,
   audio_source: 'mix',
-  mirror: true,
+  mirror: false,
+  direction: 'up',
+  peaks: true,
 };
 
 export interface ToastItem {

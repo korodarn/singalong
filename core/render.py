@@ -482,6 +482,62 @@ def format_ffmpeg_color(hex_str: str) -> str:
     return "0xFFD700"
 
 
+def build_visualizer_filter(vis_audio_idx: int, visualizer_cfg: dict, width: int, height: int) -> tuple[str, int, int, float]:
+    vis_type = visualizer_cfg.get("type", "bars")
+    vis_x = int(visualizer_cfg.get("x", 260))
+    vis_y = int(visualizer_cfg.get("y", 780))
+    vis_w = int(visualizer_cfg.get("width", 1400))
+    vis_h = int(visualizer_cfg.get("height", 160))
+    vis_w = max(32, vis_w - (vis_w % 2))
+    vis_h = max(32, vis_h - (vis_h % 2))
+    vis_x = max(0, min(width - 32, vis_x))
+    vis_y = max(0, min(height - 32, vis_y))
+
+    raw_color = visualizer_cfg.get("color", "#FFD700")
+    vis_color = format_ffmpeg_color(raw_color)
+    opacity = max(0.05, min(1.0, float(visualizer_cfg.get("opacity", 0.85))))
+
+    direction = visualizer_cfg.get("direction")
+    if not direction:
+        direction = "center" if visualizer_cfg.get("mirror", False) else "up"
+
+    if vis_type == "bars":
+        if direction == "down":
+            vis_filter = f"[{vis_audio_idx}:a]showfreqs=s={vis_w}x{vis_h}:mode=bar:ascale=log:fscale=log:colors={vis_color}:win_size=2048:overlap=0.8,vflip[vis_raw]"
+        elif direction == "center":
+            half_h = max(16, (vis_h // 2) - ((vis_h // 2) % 2))
+            vis_filter = f"[{vis_audio_idx}:a]showfreqs=s={vis_w}x{half_h}:mode=bar:ascale=log:fscale=log:colors={vis_color}:win_size=2048:overlap=0.8,split[sf_top][sf_bot];[sf_bot]vflip[sf_bot_flip];[sf_top][sf_bot_flip]vstack[vis_raw]"
+        else:
+            vis_filter = f"[{vis_audio_idx}:a]showfreqs=s={vis_w}x{vis_h}:mode=bar:ascale=log:fscale=log:colors={vis_color}:win_size=2048:overlap=0.8[vis_raw]"
+    elif vis_type == "waveform":
+        if direction == "down":
+            vis_filter = f"[{vis_audio_idx}:a]showwaves=s={vis_w}x{vis_h}:mode=cline:colors={vis_color}:scale=cbrt:draw=full,vflip[vis_raw]"
+        else:
+            vis_filter = f"[{vis_audio_idx}:a]showwaves=s={vis_w}x{vis_h}:mode=cline:colors={vis_color}:scale=cbrt:draw=full[vis_raw]"
+    elif vis_type == "line":
+        if direction == "down":
+            vis_filter = f"[{vis_audio_idx}:a]showwaves=s={vis_w}x{vis_h}:mode=line:colors={vis_color}:scale=lin:draw=full,vflip[vis_raw]"
+        else:
+            vis_filter = f"[{vis_audio_idx}:a]showwaves=s={vis_w}x{vis_h}:mode=line:colors={vis_color}:scale=lin:draw=full[vis_raw]"
+    elif vis_type == "p2p":
+        if direction == "down":
+            vis_filter = f"[{vis_audio_idx}:a]showwaves=s={vis_w}x{vis_h}:mode=p2p:colors={vis_color}:scale=cbrt:draw=full,vflip[vis_raw]"
+        else:
+            vis_filter = f"[{vis_audio_idx}:a]showwaves=s={vis_w}x{vis_h}:mode=p2p:colors={vis_color}:scale=cbrt:draw=full[vis_raw]"
+    elif vis_type == "circle":
+        sq = max(64, min(vis_w, vis_h))
+        sq = sq - (sq % 2)
+        r_c, g_c, b_c = hex_to_rgb(raw_color)
+        vis_filter = f"[{vis_audio_idx}:a]avectorscope=s={sq}x{sq}:m=lissajous:draw=line:rc={r_c}:gc={g_c}:bc={b_c}[vis_raw]"
+    elif vis_type == "volume":
+        chan_h = max(8, min(400, vis_h // 2))
+        vis_filter = f"[{vis_audio_idx}:a]showvolume=w={vis_w}:h={chan_h}:f=0:p=0:t=0:v=0[vis_raw]"
+    else:
+        vis_filter = f"[{vis_audio_idx}:a]showfreqs=s={vis_w}x{vis_h}:mode=bar:ascale=log:fscale=log:colors={vis_color}:win_size=2048:overlap=0.8[vis_raw]"
+
+    return vis_filter, vis_x, vis_y, opacity
+
+
 def render_video(
     ass_path: Path,
     output_path: Path,
@@ -547,39 +603,7 @@ def render_video(
         bg_pipe = ",".join(filters)
 
         if vis_enabled:
-            vis_type = visualizer_cfg.get("type", "bars")
-            vis_x = int(visualizer_cfg.get("x", 260))
-            vis_y = int(visualizer_cfg.get("y", 780))
-            vis_w = int(visualizer_cfg.get("width", 1400))
-            vis_h = int(visualizer_cfg.get("height", 160))
-            vis_w = max(32, vis_w - (vis_w % 2))
-            vis_h = max(32, vis_h - (vis_h % 2))
-            vis_x = max(0, min(width - 32, vis_x))
-            vis_y = max(0, min(height - 32, vis_y))
-
-            raw_color = visualizer_cfg.get("color", "#FFD700")
-            vis_color = format_ffmpeg_color(raw_color)
-            opacity = max(0.05, min(1.0, float(visualizer_cfg.get("opacity", 0.85))))
-
-            if vis_type == "bars":
-                vis_filter = f"[{vis_audio_idx}:a]showfreqs=s={vis_w}x{vis_h}:mode=bar:ascale=log:fscale=log:colors={vis_color}:win_size=2048:overlap=0.8[vis_raw]"
-            elif vis_type == "waveform":
-                vis_filter = f"[{vis_audio_idx}:a]showwaves=s={vis_w}x{vis_h}:mode=cline:colors={vis_color}:scale=cbrt:draw=full[vis_raw]"
-            elif vis_type == "line":
-                vis_filter = f"[{vis_audio_idx}:a]showwaves=s={vis_w}x{vis_h}:mode=line:colors={vis_color}:scale=lin:draw=full[vis_raw]"
-            elif vis_type == "p2p":
-                vis_filter = f"[{vis_audio_idx}:a]showwaves=s={vis_w}x{vis_h}:mode=p2p:colors={vis_color}:scale=cbrt:draw=full[vis_raw]"
-            elif vis_type == "circle":
-                sq = max(64, min(vis_w, vis_h))
-                sq = sq - (sq % 2)
-                r_c, g_c, b_c = hex_to_rgb(raw_color)
-                vis_filter = f"[{vis_audio_idx}:a]avectorscope=s={sq}x{sq}:m=lissajous:draw=line:rc={r_c}:gc={g_c}:bc={b_c}[vis_raw]"
-            elif vis_type == "volume":
-                chan_h = max(8, min(400, vis_h // 2))
-                vis_filter = f"[{vis_audio_idx}:a]showvolume=w={vis_w}:h={chan_h}:f=0:p=0:t=0:v=0[vis_raw]"
-            else:
-                vis_filter = f"[{vis_audio_idx}:a]showfreqs=s={vis_w}x{vis_h}:mode=bar:ascale=log:fscale=log:colors={vis_color}:win_size=2048:overlap=0.8[vis_raw]"
-
+            vis_filter, vis_x, vis_y, opacity = build_visualizer_filter(vis_audio_idx, visualizer_cfg, width, height)
             trans_filter = f"[vis_raw]format=rgba,colorkey=0x000000:0.1:0.1,colorchannelmixer=aa={opacity:.2f}[vis]"
             fc = (
                 f"[0:v]{bg_pipe}[v_bg];"
@@ -615,39 +639,7 @@ def render_video(
             vis_audio_idx = 2
 
         if vis_enabled:
-            vis_type = visualizer_cfg.get("type", "bars")
-            vis_x = int(visualizer_cfg.get("x", 260))
-            vis_y = int(visualizer_cfg.get("y", 780))
-            vis_w = int(visualizer_cfg.get("width", 1400))
-            vis_h = int(visualizer_cfg.get("height", 160))
-            vis_w = max(32, vis_w - (vis_w % 2))
-            vis_h = max(32, vis_h - (vis_h % 2))
-            vis_x = max(0, min(width - 32, vis_x))
-            vis_y = max(0, min(height - 32, vis_y))
-
-            raw_color = visualizer_cfg.get("color", "#FFD700")
-            vis_color = format_ffmpeg_color(raw_color)
-            opacity = max(0.05, min(1.0, float(visualizer_cfg.get("opacity", 0.85))))
-
-            if vis_type == "bars":
-                vis_filter = f"[{vis_audio_idx}:a]showfreqs=s={vis_w}x{vis_h}:mode=bar:ascale=log:fscale=log:colors={vis_color}:win_size=2048:overlap=0.8[vis_raw]"
-            elif vis_type == "waveform":
-                vis_filter = f"[{vis_audio_idx}:a]showwaves=s={vis_w}x{vis_h}:mode=cline:colors={vis_color}:scale=cbrt:draw=full[vis_raw]"
-            elif vis_type == "line":
-                vis_filter = f"[{vis_audio_idx}:a]showwaves=s={vis_w}x{vis_h}:mode=line:colors={vis_color}:scale=lin:draw=full[vis_raw]"
-            elif vis_type == "p2p":
-                vis_filter = f"[{vis_audio_idx}:a]showwaves=s={vis_w}x{vis_h}:mode=p2p:colors={vis_color}:scale=cbrt:draw=full[vis_raw]"
-            elif vis_type == "circle":
-                sq = max(64, min(vis_w, vis_h))
-                sq = sq - (sq % 2)
-                r_c, g_c, b_c = hex_to_rgb(raw_color)
-                vis_filter = f"[{vis_audio_idx}:a]avectorscope=s={sq}x{sq}:m=lissajous:draw=line:rc={r_c}:gc={g_c}:bc={b_c}[vis_raw]"
-            elif vis_type == "volume":
-                chan_h = max(8, min(400, vis_h // 2))
-                vis_filter = f"[{vis_audio_idx}:a]showvolume=w={vis_w}:h={chan_h}:f=0:p=0:t=0:v=0[vis_raw]"
-            else:
-                vis_filter = f"[{vis_audio_idx}:a]showfreqs=s={vis_w}x{vis_h}:mode=bar:ascale=log:fscale=log:colors={vis_color}:win_size=2048:overlap=0.8[vis_raw]"
-
+            vis_filter, vis_x, vis_y, opacity = build_visualizer_filter(vis_audio_idx, visualizer_cfg, width, height)
             trans_filter = f"[vis_raw]format=rgba,colorkey=0x000000:0.1:0.1,colorchannelmixer=aa={opacity:.2f}[vis]"
             fc = (
                 f"{vis_filter};"

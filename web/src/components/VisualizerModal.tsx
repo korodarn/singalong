@@ -17,22 +17,22 @@ const POSITION_PRESETS: { name: string; desc: string; config: Partial<Visualizer
   {
     name: 'Above Lyrics (Recommended)',
     desc: 'Centered 1400×160 band just above subtitle baseline',
-    config: { x: 260, y: 770, width: 1400, height: 160 },
+    config: { x: 260, y: 770, width: 1400, height: 160, direction: 'up', mirror: false },
   },
   {
     name: 'Bottom Strip',
     desc: 'Full-width 1920×80 subtle bar below subtitles',
-    config: { x: 0, y: 1000, width: 1920, height: 80 },
+    config: { x: 0, y: 1000, width: 1920, height: 80, direction: 'up', mirror: false },
   },
   {
     name: 'Top Banner',
-    desc: 'Full-width 1920×90 ambient visualizer along the top edge',
-    config: { x: 0, y: 0, width: 1920, height: 90 },
+    desc: 'Full-width 1920×90 ambient visualizer along the top edge (hangs downward)',
+    config: { x: 0, y: 0, width: 1920, height: 90, direction: 'down', mirror: false },
   },
   {
     name: 'Center Stage',
     desc: 'Prominent 1200×220 audio wave band across screen center',
-    config: { x: 360, y: 430, width: 1200, height: 220 },
+    config: { x: 360, y: 430, width: 1200, height: 220, direction: 'center', mirror: true },
   },
   {
     name: 'Center Lissajous Circle',
@@ -44,6 +44,7 @@ const POSITION_PRESETS: { name: string; desc: string; config: Partial<Visualizer
 export const VisualizerModal: Component = () => {
   const vis = (): VisualizerConfig => {
     const raw = store.projectData()?.metadata?.visualizer;
+    const direction = raw?.direction || (raw?.mirror ? 'center' : DEFAULT_VISUALIZER.direction);
     return {
       ...DEFAULT_VISUALIZER,
       ...(raw || {}),
@@ -54,6 +55,9 @@ export const VisualizerModal: Component = () => {
       width: typeof raw?.width === 'number' && !isNaN(raw.width) ? raw.width : DEFAULT_VISUALIZER.width,
       height: typeof raw?.height === 'number' && !isNaN(raw.height) ? raw.height : DEFAULT_VISUALIZER.height,
       opacity: typeof raw?.opacity === 'number' && !isNaN(raw.opacity) ? raw.opacity : DEFAULT_VISUALIZER.opacity,
+      direction,
+      mirror: direction === 'center',
+      peaks: raw?.peaks ?? DEFAULT_VISUALIZER.peaks,
     };
   };
 
@@ -245,16 +249,45 @@ export const VisualizerModal: Component = () => {
 
                 <div class="vis-field">
                   <div class="vis-field-header">
-                    <span>Symmetry / Mirror</span>
+                    <span>Direction / Alignment</span>
+                  </div>
+                  <div class="btn-group">
+                    <button
+                      class={`btn-toggle ${vis().direction === 'up' ? 'active' : ''}`}
+                      onClick={() => handleUpdate({ direction: 'up', mirror: false })}
+                      title="Bottom-Up: Baseline at bottom, bars push to top"
+                    >
+                      🔼 Push to Top
+                    </button>
+                    <button
+                      class={`btn-toggle ${vis().direction === 'center' ? 'active' : ''}`}
+                      onClick={() => handleUpdate({ direction: 'center', mirror: true })}
+                      title="Symmetrical: Mirrored vertically around center"
+                    >
+                      ↕️ Mirrored Center
+                    </button>
+                    <button
+                      class={`btn-toggle ${vis().direction === 'down' ? 'active' : ''}`}
+                      onClick={() => handleUpdate({ direction: 'down', mirror: false })}
+                      title="Top-Down: Baseline at top ceiling, bars hang downward"
+                    >
+                      🔽 Hang from Top
+                    </button>
+                  </div>
+                </div>
+
+                <div class="vis-field">
+                  <div class="vis-field-header">
+                    <span>Peak Envelope Caps</span>
                   </div>
                   <label class="toggle-control">
                     <input
                       type="checkbox"
-                      checked={vis().mirror !== false}
-                      onChange={(e) => handleUpdate({ mirror: e.currentTarget.checked })}
+                      checked={vis().peaks !== false}
+                      onChange={(e) => handleUpdate({ peaks: e.currentTarget.checked })}
                     />
                     <span class="toggle-slider" />
-                    <span class="text-sm">{vis().mirror !== false ? 'Mirrored Vertically' : 'Single Direction'}</span>
+                    <span class="text-sm">{vis().peaks !== false ? 'Dynamic Peak Caps ON' : 'Peak Caps OFF'}</span>
                   </label>
                 </div>
               </div>
