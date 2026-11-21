@@ -40,7 +40,14 @@ from core.lyrics import (
     validate_lyrics_candidate,
 )
 from core.workspace import purge_workdir
-from core.aligner import VocalAnalyzer, forced_align_with_mms, align_words_in_island, write_outputs
+from core.aligner import (
+    VocalAnalyzer,
+    forced_align_with_mms,
+    align_words_in_island,
+    localize_line_window,
+    align_line_with_method,
+    write_outputs,
+)
 import torch
 import numpy as np
 
@@ -577,34 +584,21 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
 
             adj_s, lead_breath = analyzer.find_voiced_attack(nom_s)
             elastic_e, _ = analyzer.find_elastic_inter_line_boundary(nom_e)
+            asr_raw = orig_diag.get("asr_raw_tokens") or []
+            loc_s, loc_e = localize_line_window(adj_s, elastic_e, toks, asr_raw, analyzer)
 
             is_ja = any(has_kana(t.get("text", "")) for t in toks)
-            mms_toks = forced_align_with_mms(
+            req_method = options.get("method", "auto")
+            tok_list, method = align_line_with_method(
                 toks,
-                adj_s,
-                elastic_e,
+                loc_s,
+                loc_e,
                 analyzer,
+                method=req_method,
+                asr_toks=asr_raw,
                 is_ja=is_ja,
                 device="cuda" if torch.cuda.is_available() else "cpu",
             )
-            if mms_toks and len(mms_toks) == len(toks):
-                tok_list = mms_toks
-                method = "mms_fa_ctc"
-            else:
-                tok_list = align_words_in_island(toks, adj_s, elastic_e, [], analyzer)
-                method = "island_weighted"
-                for idx_t, t in enumerate(tok_list):
-                    if idx_t < len(toks) and toks[idx_t].get("comment"):
-                        t["comment"] = toks[idx_t]["comment"]
-                    if "diag" not in t:
-                        t["diag"] = {
-                            "source": "dp_boundary",
-                            "ctc_score": 0.5,
-                            "rms_db": round(float(analyzer.mean_db(t["start"], t["end"])), 1),
-                            "onset_strength": 1.0,
-                            "sustain_extended_ms": 0,
-                            "flags": [],
-                        }
 
             if tok_list:
                 add_phonetics(tok_list)

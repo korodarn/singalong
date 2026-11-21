@@ -16,6 +16,7 @@ import torchaudio
 import torchaudio.functional as taf
 
 from core.models import LineDiagnostics, TokenDiagnostics, DiagnosticFlag
+from core.qwen_aligner import forced_align_with_qwen3, is_qwen3_available
 from core.phonetics import (
     add_phonetics,
     apply_korean_phonology,
@@ -961,6 +962,168 @@ def forced_align_with_mms(
     return out_tokens
 
 
+ALIGNMENT_METHODS = ("auto", "qwen3_fa", "mms_fa", "asr_anchored", "island_dp")
+
+
+def localize_line_window(
+    adj_s: int,
+    elastic_end: int,
+    norm_chars: list[dict],
+    asr_toks: list[dict] | None,
+    analyzer: VocalAnalyzer,
+) -> tuple[int, int]:
+    """
+    Pass 1 (Coarse Line Localization): tighten a nominal [adj_s, elastic_end] window
+    by clipping trailing instrumental interludes (long vocal silence gaps) and tiny
+    leading spillover islands from the previous line.
+    """
+    if analyzer.rms_db is None or elastic_end <= adj_s + 400:
+        return adj_s, elastic_end
+
+    total_syls = max(1, sum(count_syllables(c.get("text", "")) for c in norm_chars))
+    islands = analyzer.active_islands(adj_s, elastic_end, min_gap_ms=350, min_island_ms=110)
+    if not islands:
+        return adj_s, elastic_end
+
+    # 1. Drop tiny leading spillover island (e.g. previous line's final consonant tail)
+    while len(islands) > 1:
+        first_a, first_b = islands[0]
+        gap = islands[1][0] - first_b
+        rest_dur = sum(b - a for a, b in islands[1:])
+        if (first_b - first_a) < 260 and gap >= 150 and rest_dur >= total_syls * 220:
+            islands.pop(0)
+        else:
+            break
+
+    win_s = max(adj_s, islands[0][0])
+
+    # 2. Clip trailing instrumental interludes: stop once we have enough sung duration
+    # and encounter a long unvoiced gap (>= 1400ms)
+    min_sung_ms = max(800, total_syls * 150)
+    acc_sung = 0
+    win_e = islands[-1][1]
+    for idx, (ia, ib) in enumerate(islands):
+        acc_sung += (ib - ia)
+        if idx + 1 < len(islands):
+            gap = islands[idx + 1][0] - ib
+            if gap >= 1400 and acc_sung >= min_sung_ms:
+                win_e = min(elastic_end, ib + 250)
+                break
+
+    # 3. If the entire window is still very long with no extra islands (e.g. instrument bleed),
+    # use matching ASR end if available to keep the window reasonable
+    if asr_toks and (win_e - win_s) > max(9000, total_syls * 950):
+        if _tokens_match_chars(norm_chars, asr_toks, min_ratio=65.0):
+            asr_e = asr_toks[-1]["end"]
+            if win_s + min_sung_ms <= asr_e < win_e - 1500:
+                win_e = min(win_e, asr_e + 1200)
+
+    if win_e <= win_s + 200:
+        return adj_s, elastic_end
+    return int(win_s), int(win_e)
+
+
+def align_line_with_method(
+    words: list[dict],
+    span_s: int,
+    span_e: int,
+    analyzer: VocalAnalyzer,
+    method: str = "auto",
+    asr_toks: list[dict] | None = None,
+    lang: str | None = None,
+    is_ja: bool = False,
+    device: str | None = None,
+) -> tuple[list[dict], str]:
+    """
+    Pass 2 (Fine Word/Syllable Alignment): align `words` inside a localized [span_s, span_e]
+    window using the requested alignment backend:
+      - 'auto': MMS-FA when confident, Qwen3-ForcedAligner when MMS-FA has low singing CTC or fails,
+                falling back to ASR-anchored / Vocal Energy Island DP.
+      - 'qwen3_fa': Force Qwen3-ForcedAligner-0.6B.
+      - 'mms_fa': Force Meta MMS-FA CTC forced alignment.
+      - 'asr_anchored': Force ASR-anchored clause alignment.
+      - 'island_dp': Force Vocal Energy Island + onset DP alignment.
+    Returns (aligned_tokens, actual_method_name).
+    """
+    req = (method or "auto").lower().strip()
+    dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    line_text = "".join(w.get("text", "") + (" " if w.get("space") else "") for w in words).strip()
+    asr_list = asr_toks or []
+
+    def _copy_comments(aligned: list[dict]) -> list[dict]:
+        if len(aligned) == len(words):
+            for orig, dst in zip(words, aligned):
+                if orig.get("comment") and not dst.get("comment"):
+                    dst["comment"] = orig["comment"]
+        return aligned
+
+    def _populate_fallback_diag(tok_list: list[dict], src: str, default_score: float):
+        for t in tok_list:
+            if "diag" not in t:
+                t_rms = analyzer.mean_db(t["start"], t["end"])
+                t_ons = float(analyzer.onset[analyzer._idx(t["start"])]) if analyzer.onset is not None else 1.0
+                t["diag"] = {
+                    "source": src,
+                    "ctc_score": default_score,
+                    "rms_db": round(float(t_rms), 1),
+                    "onset_strength": round(float(t_ons), 2),
+                    "sustain_extended_ms": 0,
+                    "flags": [],
+                }
+
+    if req == "qwen3_fa":
+        q_toks = forced_align_with_qwen3(words, span_s, span_e, analyzer, lang=lang, is_ja=is_ja, device=dev)
+        if q_toks and len(q_toks) == len(words):
+            return _copy_comments(q_toks), "qwen3_fa"
+
+    if req == "mms_fa":
+        m_toks = forced_align_with_mms(words, span_s, span_e, analyzer, is_ja=is_ja, device=dev)
+        if m_toks and len(m_toks) == len(words):
+            return _copy_comments(m_toks), "mms_fa_ctc"
+
+    if req == "island_dp":
+        d_toks = align_words_in_island(words, span_s, span_e, [], analyzer)
+        _populate_fallback_diag(d_toks, "dp_boundary", 0.35)
+        return _copy_comments(d_toks), "island_weighted"
+
+    if req == "asr_anchored":
+        a_toks = align_line_with_clauses(line_text, asr_list, span_s, span_e, analyzer, drop_silent=False)
+        if a_toks:
+            _populate_fallback_diag(a_toks, "asr", 0.55)
+            return _copy_comments(a_toks), "asr_anchored"
+
+    # 'auto' (or fallback if an explicit forced aligner returned None)
+    mms_toks = forced_align_with_mms(words, span_s, span_e, analyzer, is_ja=is_ja, device=dev)
+    mms_ok = bool(mms_toks and len(mms_toks) == len(words) and _mms_alignment_is_sane(mms_toks, analyzer))
+    mms_mean = float(np.mean([t["diag"]["ctc_score"] for t in mms_toks])) if mms_ok else 0.0
+
+    # When MMS-FA is confident (>= 0.14), its 20ms frame resolution is crispest.
+    if mms_ok and mms_mean >= 0.14:
+        return _copy_comments(mms_toks), "mms_fa_ctc"
+
+    # Otherwise try Qwen3-ForcedAligner (stronger acoustic/semantic grounding on tough singing lines)
+    if is_qwen3_available():
+        q_toks = forced_align_with_qwen3(words, span_s, span_e, analyzer, lang=lang, is_ja=is_ja, device=dev)
+        if q_toks and len(q_toks) == len(words):
+            return _copy_comments(q_toks), "qwen3_fa"
+
+    # Fall back to sane low-CTC MMS-FA if available
+    if mms_ok:
+        return _copy_comments(mms_toks), "mms_fa_ctc"
+
+    # Final fallback: ASR-anchored / Island DP
+    fb_toks = align_line_with_clauses(line_text, asr_list, span_s, span_e, analyzer)
+    if fb_toks:
+        c_py = "".join(_token_phonetic_str(c["text"], is_ja=is_ja) for c in words)
+        t_py = "".join(_token_phonetic_str(t["text"], is_ja=is_ja) for t in asr_list)
+        asr_matched = bool(c_py and t_py and fuzz.ratio(c_py, t_py) >= 65.0)
+        m_name = "asr_anchored" if asr_matched else "island_weighted"
+        _populate_fallback_diag(fb_toks, "asr" if asr_matched else "dp_boundary", 0.55 if asr_matched else 0.35)
+        return _copy_comments(fb_toks), m_name
+
+    return [], "uniform_fallback"
+
+
 def _mms_alignment_is_sane(mms_toks: list[dict], analyzer: VocalAnalyzer) -> bool:
     """
     Validate an MMS-FA forced-alignment result for singing vocals.
@@ -1210,44 +1373,20 @@ def align_lrc_with_tokens(lrc_lines, tokens, analyzer: VocalAnalyzer | None = No
             # Leading breath rejection
             adj_s, lead_breath_trimmed = analyzer.find_voiced_attack(anc_s)
 
-            # Attempt MMS-FA Forced Alignment
-            mms_toks = forced_align_with_mms(
+            # Pass 1: Coarse line localization (clips trailing instrumental interludes & leading spillover)
+            loc_s, loc_e = localize_line_window(adj_s, elastic_end, norm_chars, toks, analyzer)
+
+            # Pass 2: Fine word/syllable alignment via pluggable aligner dispatcher
+            tok_list, align_method = align_line_with_method(
                 norm_chars,
-                adj_s,
-                elastic_end,
+                loc_s,
+                loc_e,
                 analyzer,
+                method="auto",
+                asr_toks=toks,
                 is_ja=is_ja_song,
                 device="cuda" if torch.cuda.is_available() else "cpu",
             )
-
-            tok_list = None
-            align_method = "uniform_fallback"
-
-            if mms_toks and len(mms_toks) == len(norm_chars) and _mms_alignment_is_sane(mms_toks, analyzer):
-                tok_list = mms_toks
-                align_method = "mms_fa_ctc"
-
-            if not tok_list:
-                # Fallback to ASR-anchored island alignment
-                tok_list = align_line_with_clauses(line_text, toks, adj_s, elastic_end, analyzer)
-                if tok_list:
-                    c_py = "".join(_token_phonetic_str(c["text"], is_ja=is_ja_song) for c in norm_chars)
-                    t_py = "".join(_token_phonetic_str(t["text"], is_ja=is_ja_song) for t in toks)
-                    asr_matched = bool(c_py and t_py and fuzz.ratio(c_py, t_py) >= 65.0)
-                    align_method = "asr_anchored" if asr_matched else "island_weighted"
-                    # Populate token diag for fallback tokens
-                    for t in tok_list:
-                        if "diag" not in t:
-                            t_rms = analyzer.mean_db(t["start"], t["end"])
-                            t_ons = float(analyzer.onset[analyzer._idx(t["start"])]) if analyzer.onset is not None else 1.0
-                            t["diag"] = {
-                                "source": "asr" if asr_matched else "dp_boundary",
-                                "ctc_score": 0.55 if asr_matched else 0.35,
-                                "rms_db": round(float(t_rms), 1),
-                                "onset_strength": round(float(t_ons), 2),
-                                "sustain_extended_ms": 0,
-                                "flags": [],
-                            }
 
             if not tok_list:
                 continue
