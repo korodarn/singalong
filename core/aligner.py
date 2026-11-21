@@ -648,7 +648,8 @@ def allocate_chars_to_islands(norm_chars: list[dict], islands: list[tuple[int, i
             valid_1to1 = True
             cand_out = []
             for idx, (c, t) in enumerate(zip(sub_chars, sub_toks)):
-                ts, te = analyzer.clamp_token_silence(t["start"], t["end"])
+                tok_s = max(span_s, t["start"]) if idx == 0 else t["start"]
+                ts, te = analyzer.clamp_token_silence(tok_s, t["end"])
                 if idx > 0 and ts < cand_out[-1]["end"]:
                     ts = cand_out[-1]["end"]
                 if te - ts < 65:
@@ -687,12 +688,14 @@ def align_line_with_clauses(line_text: str, toks: list[dict],
     compat_toks = _filter_script_compatible_tokens(line_text, toks)
     voiced_toks = [
         t for t in compat_toks
-        if fallback_start - 350 <= t["start"] < fallback_end
-        and analyzer.mean_db(t["start"], t["end"]) >= -44.0
+        if t["end"] > fallback_start + 40
+        and t["start"] < fallback_end - 40
+        and t["start"] >= fallback_start - 900
+        and analyzer.mean_db(max(t["start"], fallback_start), t["end"]) >= -44.0
     ]
     asr_matches_line = _tokens_match_chars(norm_chars, voiced_toks, min_ratio=65.0)
 
-    win_s = min(fallback_start, voiced_toks[0]["start"]) if (voiced_toks and asr_matches_line) else fallback_start
+    win_s = min(fallback_start, voiced_toks[0]["start"]) if (voiced_toks and asr_matches_line and voiced_toks[0]["start"] >= fallback_start - 350) else fallback_start
     win_e = fallback_end
 
     if drop_silent and not voiced_toks and analyzer.rms_db is not None:
@@ -705,8 +708,18 @@ def align_line_with_clauses(line_text: str, toks: list[dict],
 
     islands = analyzer.active_islands(win_s, win_e)
 
-    # Drop tiny trailing pickup islands at the very end of a long window (which belong to the next line's vocal pickup)
+    # Drop tiny leading spillover islands at the very start of a window (e.g. previous line's final consonant tail)
     total_syls = sum(count_syllables(c["text"]) for c in norm_chars)
+    while len(islands) > 1:
+        first_a, first_b = islands[0]
+        gap = islands[1][0] - first_b
+        rest_dur = sum(b - a for a, b in islands[1:])
+        if (first_b - first_a) < 260 and gap >= 150 and rest_dur >= total_syls * 220:
+            islands.pop(0)
+        else:
+            break
+
+    # Drop tiny trailing pickup islands at the very end of a long window (which belong to the next line's vocal pickup)
     while len(islands) > 1:
         prev_dur = sum(b - a for a, b in islands[:-1])
         last_a, last_b = islands[-1]
@@ -948,6 +961,34 @@ def forced_align_with_mms(
     return out_tokens
 
 
+def _mms_alignment_is_sane(mms_toks: list[dict], analyzer: VocalAnalyzer) -> bool:
+    """
+    Validate an MMS-FA forced-alignment result for singing vocals.
+    Speech-trained CTC models often emit lower absolute probabilities on sung vowels (vibrato/reverb)
+    even when the Viterbi path is accurate, so we check path sanity rather than a high fixed CTC floor.
+    """
+    if not mms_toks:
+        return False
+    scores = [float(t.get("diag", {}).get("ctc_score", 0.0)) for t in mms_toks]
+    mean_ctc = float(np.mean(scores))
+    max_ctc = float(np.max(scores))
+    # Reject only when CTC emits virtually no acoustic signal across the entire line
+    if mean_ctc < 0.008 or max_ctc < 0.02:
+        return False
+    # Reject collapsed alignments where most tokens are crushed to the minimum duration
+    durs = [t["end"] - t["start"] for t in mms_toks]
+    if len(mms_toks) >= 4:
+        crushed = sum(1 for d in durs if d <= 85)
+        if crushed / len(mms_toks) > 0.60:
+            return False
+    # Reject if most tokens sit in vocal silence
+    if analyzer.rms_db is not None:
+        silent = sum(1 for t in mms_toks if float(t.get("diag", {}).get("rms_db", 0.0)) < -42.0)
+        if silent / len(mms_toks) > 0.45:
+            return False
+    return True
+
+
 def estimate_global_lrc_drift(
     lrc_lines: list[dict],
     tokens: list[dict],
@@ -1182,11 +1223,9 @@ def align_lrc_with_tokens(lrc_lines, tokens, analyzer: VocalAnalyzer | None = No
             tok_list = None
             align_method = "uniform_fallback"
 
-            if mms_toks and len(mms_toks) == len(norm_chars):
-                mean_ctc = float(np.mean([t["diag"]["ctc_score"] for t in mms_toks]))
-                if mean_ctc >= 0.28:
-                    tok_list = mms_toks
-                    align_method = "mms_fa_ctc"
+            if mms_toks and len(mms_toks) == len(norm_chars) and _mms_alignment_is_sane(mms_toks, analyzer):
+                tok_list = mms_toks
+                align_method = "mms_fa_ctc"
 
             if not tok_list:
                 # Fallback to ASR-anchored island alignment

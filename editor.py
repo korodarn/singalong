@@ -562,9 +562,14 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
                 vocals_cand = self.server.workdir / f"{vid}.wav"
             analyzer = VocalAnalyzer(vocals_cand if vocals_cand.exists() else None)
 
-            nom_s = ln.get("start", 0) if ln.get("start", 0) > 0 else (ln.get("diag", {}).get("lrc_nominal_start") or 0)
+            orig_diag = ln.get("diag") or {}
+            orig_lrc_s = orig_diag.get("lrc_nominal_start")
+            orig_lrc_e = orig_diag.get("lrc_nominal_end")
+            nom_s = orig_lrc_s if orig_lrc_s is not None else ln.get("start", 0)
             nom_e = (
-                lines[line_idx + 1]["start"] if line_idx + 1 < len(lines) else ln.get("end", 0) + 4000
+                orig_lrc_e
+                if orig_lrc_e is not None
+                else (lines[line_idx + 1]["start"] if line_idx + 1 < len(lines) else ln.get("end", 0) + 4000)
             )
 
             if options.get("ignore_lrc_end_cap"):
@@ -588,7 +593,9 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
             else:
                 tok_list = align_words_in_island(toks, adj_s, elastic_e, [], analyzer)
                 method = "island_weighted"
-                for t in tok_list:
+                for idx_t, t in enumerate(tok_list):
+                    if idx_t < len(toks) and toks[idx_t].get("comment"):
+                        t["comment"] = toks[idx_t]["comment"]
                     if "diag" not in t:
                         t["diag"] = {
                             "source": "dp_boundary",
@@ -604,21 +611,23 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
                 ln["tokens"] = tok_list
                 ln["start"] = tok_list[0]["start"]
                 ln["end"] = tok_list[-1]["end"]
+                saved_lrc_s = orig_lrc_s if orig_lrc_s is not None else nom_s
+                saved_lrc_e = orig_lrc_e if orig_lrc_e is not None else nom_e
                 ln["diag"] = {
                     "line_idx": line_idx,
-                    "lrc_nominal_start": nom_s,
-                    "lrc_nominal_end": nom_e,
-                    "shift_from_lrc_start_ms": ln["start"] - nom_s,
-                    "shift_from_lrc_end_ms": ln["end"] - nom_e,
+                    "lrc_nominal_start": saved_lrc_s,
+                    "lrc_nominal_end": saved_lrc_e,
+                    "shift_from_lrc_start_ms": ln["start"] - saved_lrc_s,
+                    "shift_from_lrc_end_ms": ln["end"] - saved_lrc_e,
                     "alignment_method": method,
-                    "phonetic_match_score": 100.0,
+                    "phonetic_match_score": orig_diag.get("phonetic_match_score", 100.0),
                     "mean_ctc_score": round(float(np.mean([t.get("diag", {}).get("ctc_score", 0.7) for t in tok_list])), 2),
                     "mean_rms_db": round(float(analyzer.mean_db(ln["start"], ln["end"])), 1),
                     "lead_in_breath_trimmed_ms": lead_breath,
-                    "tail_sustain_extended_ms": max(0, ln["end"] - nom_e),
+                    "tail_sustain_extended_ms": max(0, ln["end"] - saved_lrc_e),
                     "voiced_islands": [[int(a), int(b)] for a, b in analyzer.active_islands(ln["start"], ln["end"])],
-                    "asr_heard_text": ln.get("diag", {}).get("asr_heard_text", ""),
-                    "asr_raw_tokens": ln.get("diag", {}).get("asr_raw_tokens", []),
+                    "asr_heard_text": orig_diag.get("asr_heard_text", ""),
+                    "asr_raw_tokens": orig_diag.get("asr_raw_tokens", []),
                     "flags": [],
                 }
 

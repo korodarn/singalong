@@ -14,6 +14,8 @@ from core.aligner import (
     estimate_global_lrc_drift,
     forced_align_with_mms,
     align_lrc_with_tokens,
+    align_line_with_clauses,
+    _mms_alignment_is_sane,
 )
 from core.linter import lint_project
 from core.workspace import purge_workdir
@@ -211,3 +213,48 @@ def test_workspace_purge(tmp_path: Path):
     assert (workdir / "vid1.wav").exists()
     assert (workdir / "vid1.json").exists()
     assert (workdir / ".gitkeep").exists()
+
+
+def test_mms_alignment_sanity_accepts_singing_low_ctc_and_rejects_collapse(temp_audio: Path):
+    analyzer = VocalAnalyzer(temp_audio)
+
+    # Low CTC (typical on singing with vibrato/reverb) but well-spread on voiced audio -> accept
+    singing_toks = [
+        {"text": "Was", "start": 950, "end": 1250, "diag": {"ctc_score": 0.06, "rms_db": -18.0}},
+        {"text": "it", "start": 1270, "end": 1440, "diag": {"ctc_score": 0.03, "rms_db": -19.0}},
+        {"text": "real", "start": 1460, "end": 2100, "diag": {"ctc_score": 0.04, "rms_db": -17.5}},
+        {"text": "mine", "start": 2120, "end": 2800, "diag": {"ctc_score": 0.08, "rms_db": -18.5}},
+    ]
+    assert _mms_alignment_is_sane(singing_toks, analyzer)
+
+    # Collapsed tokens crushed to <=85ms -> reject
+    collapsed_toks = [
+        {"text": "Was", "start": 950, "end": 1025, "diag": {"ctc_score": 0.12, "rms_db": -18.0}},
+        {"text": "it", "start": 1035, "end": 1110, "diag": {"ctc_score": 0.12, "rms_db": -18.0}},
+        {"text": "real", "start": 1120, "end": 1195, "diag": {"ctc_score": 0.12, "rms_db": -18.0}},
+        {"text": "mine", "start": 1205, "end": 2800, "diag": {"ctc_score": 0.12, "rms_db": -18.0}},
+    ]
+    assert not _mms_alignment_is_sane(collapsed_toks, analyzer)
+
+    # Zero-signal tokens -> reject
+    zero_signal = [
+        {"text": "Was", "start": 950, "end": 1400, "diag": {"ctc_score": 0.002, "rms_db": -18.0}},
+        {"text": "it", "start": 1450, "end": 1900, "diag": {"ctc_score": 0.003, "rms_db": -18.0}},
+    ]
+    assert not _mms_alignment_is_sane(zero_signal, analyzer)
+
+
+def test_fallback_preserves_breath_trimmed_leading_asr_token(temp_audio: Path):
+    analyzer = VocalAnalyzer(temp_audio)
+    # First ASR token starts at 500ms (includes leading breath), ends at 1400ms;
+    # fallback_start has been breath-trimmed to 950ms (450ms later, > old 350ms cutoff).
+    asr_toks = [
+        {"text": "Was", "start": 500, "end": 1400},
+        {"text": "it", "start": 1400, "end": 1800},
+        {"text": "real", "start": 1800, "end": 2900},
+    ]
+    aligned = align_line_with_clauses("Was it real", asr_toks, 950, 3200, analyzer)
+    assert len(aligned) == 3
+    assert aligned[0]["start"] >= 900
+    assert abs(aligned[1]["start"] - 1400) <= 60
+    assert abs(aligned[2]["start"] - 1800) <= 60
