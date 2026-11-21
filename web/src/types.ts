@@ -4,8 +4,10 @@ export interface DiagnosticFlag {
   detail: string;
 }
 
+export type AlignmentMethodOption = 'auto' | 'qwen3_fa' | 'mms_fa' | 'asr_anchored' | 'island_dp';
+
 export interface TokenDiagnostics {
-  source?: 'mms_fa' | 'asr' | 'dp_boundary' | 'char_weight' | 'interpolated';
+  source?: 'qwen3_fa' | 'mms_fa' | 'asr' | 'dp_boundary' | 'char_weight' | 'interpolated';
   ctc_score?: number;
   rms_db?: number;
   onset_strength?: number;
@@ -19,7 +21,7 @@ export interface LineDiagnostics {
   lrc_nominal_end?: number;
   shift_from_lrc_start_ms?: number;
   shift_from_lrc_end_ms?: number;
-  alignment_method?: 'mms_fa_ctc' | 'asr_anchored' | 'island_weighted' | 'uniform_fallback';
+  alignment_method?: 'qwen3_fa' | 'mms_fa_ctc' | 'asr_anchored' | 'island_weighted' | 'uniform_fallback';
   phonetic_match_score?: number;
   mean_ctc_score?: number;
   mean_rms_db?: number;

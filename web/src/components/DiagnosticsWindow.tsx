@@ -1,7 +1,15 @@
 import { Component, createSignal, For, Show, createMemo } from 'solid-js';
 import { store, fmtMs } from '../state/store';
 import { realignLine, purgeWork } from '../api';
-import { Line, Token } from '../types';
+import { AlignmentMethodOption, Line, Token } from '../types';
+
+const METHOD_OPTIONS: { value: AlignmentMethodOption; label: string }[] = [
+  { value: 'auto', label: 'Auto (Best)' },
+  { value: 'qwen3_fa', label: 'Qwen3-FA' },
+  { value: 'mms_fa', label: 'MMS-FA (CTC)' },
+  { value: 'asr_anchored', label: 'ASR Matched' },
+  { value: 'island_dp', label: 'Energy Islands' },
+];
 
 interface FlaggedLineItem {
   idx: number;
@@ -24,7 +32,13 @@ export const DiagnosticsWindow: Component<{
   const [filterMode, setFilterMode] = createSignal<'all' | 'flagged' | 'drift' | 'comments' | 'uniform'>('all');
   const [sortMode, setSortMode] = createSignal<'timeline' | 'confidence'>('timeline');
   const [realigningLineIdx, setRealigningLineIdx] = createSignal<number | null>(null);
+  const [selectedMethods, setSelectedMethods] = createSignal<Record<number, AlignmentMethodOption>>({});
   const [expandedIndices, setExpandedIndices] = createSignal<Set<number>>(new Set([store.activeLineIdx()]));
+
+  const getLineMethod = (lineIdx: number): AlignmentMethodOption => selectedMethods()[lineIdx] ?? 'auto';
+  const setLineMethod = (lineIdx: number, m: AlignmentMethodOption) => {
+    setSelectedMethods((prev) => ({ ...prev, [lineIdx]: m }));
+  };
 
   const lines = () => store.lines();
   const lintReport = () => store.projectData()?.lint;
@@ -93,9 +107,10 @@ export const DiagnosticsWindow: Component<{
   const handleRealign = async (lineIdx: number, ignoreEndCap = false) => {
     const vid = store.currentVid();
     if (!vid) return;
+    const method = getLineMethod(lineIdx);
     setRealigningLineIdx(lineIdx);
     try {
-      const res = await realignLine(vid, lineIdx, { ignore_lrc_end_cap: ignoreEndCap });
+      const res = await realignLine(vid, lineIdx, { method, ignore_lrc_end_cap: ignoreEndCap });
       if (res.ok) {
         const lns = [...store.lines()];
         lns[lineIdx] = res.line;
@@ -103,7 +118,7 @@ export const DiagnosticsWindow: Component<{
         if (res.lint && store.projectData()) {
           store.setProjectData({ ...store.projectData()!, lint: res.lint });
         }
-        store.addToast(`⚡ Re-aligned Line #${lineIdx + 1} (${res.line.diag?.alignment_method || 'mms_fa'})`);
+        store.addToast(`⚡ Re-aligned Line #${lineIdx + 1} (${res.line.diag?.alignment_method || method})`);
       }
     } catch (e: any) {
       store.addToast(`Failed to realign: ${e.message}`);
@@ -297,10 +312,16 @@ export const DiagnosticsWindow: Component<{
 
             const methodBadge = () => {
               const m = diag?.alignment_method || 'asr_anchored';
+              if (m === 'qwen3_fa') return { label: '🟣 Qwen3-FA', class: 'badge-qwen3' };
               if (m === 'mms_fa_ctc') return { label: '🟢 Meta MMS-FA CTC', class: 'badge-mms' };
               if (m === 'asr_anchored') return { label: '🔵 ASR Matched', class: 'badge-asr' };
               if (m === 'island_weighted') return { label: '🟡 Vocal Energy Islands', class: 'badge-island' };
               return { label: '🔴 Uniform Fallback', class: 'badge-uniform' };
+            };
+
+            const isLinePlayingNow = () => {
+              const now = store.currentTimeMs();
+              return now >= line.start - 150 && now <= line.end + 350;
             };
 
             return (
@@ -352,31 +373,80 @@ export const DiagnosticsWindow: Component<{
                         📋 Debug
                       </button>
                       <div class="realign-dropdown">
+                        <select
+                          class="realign-method-select"
+                          value={getLineMethod(item.idx)}
+                          onChange={(e) => setLineMethod(item.idx, e.currentTarget.value as AlignmentMethodOption)}
+                          title="Choose alignment method for this line"
+                        >
+                          <For each={METHOD_OPTIONS}>
+                            {(opt) => <option value={opt.value}>{opt.label}</option>}
+                          </For>
+                        </select>
                         <button
                           class="btn btn-xs btn-lead"
                           disabled={realigningLineIdx() === item.idx}
                           onClick={() => handleRealign(item.idx, false)}
-                          title="Re-run MMS-FA forced alignment on this line"
+                          title="Re-align this line with the selected method"
                         >
-                          {realigningLineIdx() === item.idx ? '⏳ Realigning...' : '⚡ Realign MMS-FA'}
+                          {realigningLineIdx() === item.idx ? '⏳...' : '⚡ Realign'}
                         </button>
                         <button
                           class="btn btn-xs btn-subtle"
                           disabled={realigningLineIdx() === item.idx}
                           onClick={() => handleRealign(item.idx, true)}
-                          title="Re-align and extend past premature LRC end cap (+2.5s)"
+                          title="Re-align with selected method and extend past premature LRC end cap (+2.5s)"
                         >
-                          +2.5s Sustain
+                          +2.5s
                         </button>
                       </div>
                     </div>
                   </div>
                 </div>
 
-                {/* Line Text Preview */}
-                <div class="diag-line-text" onClick={() => toggleExpand(item.idx)}>
-                  <span class="text-hanzi">
-                    {line.tokens.map((t) => t.text + (t.space ? ' ' : '')).join('')}
+                {/* Line Text Preview with Live Inline Karaoke Highlighting */}
+                <div class={`diag-line-text ${isLinePlayingNow() ? 'is-karaoke-active' : ''}`} onClick={() => toggleExpand(item.idx)}>
+                  <span class="text-hanzi diag-karaoke-line">
+                    <For each={line.tokens.filter((t) => !t.is_deleted)}>
+                      {(tok) => {
+                        const progress = () => {
+                          const now = store.currentTimeMs();
+                          if (!isLinePlayingNow()) return 0;
+                          if (now <= tok.start) return 0;
+                          if (now >= tok.end) return 100;
+                          const dur = Math.max(1, tok.end - tok.start);
+                          return Math.round(((now - tok.start) / dur) * 100);
+                        };
+                        const isActive = () => {
+                          const now = store.currentTimeMs();
+                          return now >= tok.start && now <= tok.end;
+                        };
+                        const isPassed = () => isLinePlayingNow() && store.currentTimeMs() > tok.end;
+
+                        return (
+                          <span
+                            class={`diag-karaoke-token ${isActive() ? 'is-active' : ''} ${isPassed() ? 'is-passed' : ''}`}
+                            style={
+                              isActive()
+                                ? {
+                                    background: `linear-gradient(90deg, #fbbf24 ${progress()}%, #e2e8f0 ${progress()}%)`,
+                                    '-webkit-background-clip': 'text',
+                                    'background-clip': 'text',
+                                    color: 'transparent',
+                                  }
+                                : undefined
+                            }
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handlePlayLine(tok.start, tok.end);
+                            }}
+                            title={`Play '${tok.text}' [${fmtMs(tok.start)}..${fmtMs(tok.end)}] (${tok.end - tok.start}ms)${tok.comment ? '\n💬 ' + tok.comment : ''}`}
+                          >
+                            {tok.text}{tok.space ? ' ' : ''}
+                          </span>
+                        );
+                      }}
+                    </For>
                   </span>
                   <Show when={diag?.asr_heard_text}>
                     <span class="asr-preview" title="What the unconstrained ASR engine heard">
@@ -418,6 +488,12 @@ export const DiagnosticsWindow: Component<{
                     </div>
 
                     <div class="timeline-lanes-container">
+                      <Show when={store.currentTimeMs() >= minTime && store.currentTimeMs() <= maxTime}>
+                        <div
+                          class="diag-playhead-line"
+                          style={{ left: `${toPct(store.currentTimeMs())}%` }}
+                        />
+                      </Show>
                       {/* Lane 1: Vocal Energy / Islands */}
                       <div class="timeline-lane lane-energy">
                         <Show when={diag?.voiced_islands && diag.voiced_islands.length > 0}>

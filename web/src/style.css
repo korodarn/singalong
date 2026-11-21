@@ -2575,6 +2575,12 @@ button.btn-danger:hover:not(:disabled) { background: var(--accent-danger); color
   border-radius: 4px;
 }
 
+.method-badge.badge-qwen3 {
+  background: rgba(168, 85, 247, 0.16);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.35);
+}
+
 .method-badge.badge-mms {
   background: rgba(16, 185, 129, 0.15);
   color: #34d399;
@@ -2639,12 +2645,77 @@ button.btn-danger:hover:not(:disabled) { background: var(--accent-danger); color
   gap: 4px;
 }
 
+.realign-method-select {
+  height: 24px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.realign-method-select:focus {
+  outline: none;
+  border-color: #a855f7;
+}
+
 .diag-line-text {
   margin-top: 6px;
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 12px;
   cursor: pointer;
+}
+
+.diag-line-text.is-karaoke-active {
+  background: rgba(251, 191, 36, 0.06);
+  border-radius: 4px;
+  padding: 2px 6px;
+  margin-left: -6px;
+}
+
+.diag-karaoke-line {
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+}
+
+.diag-karaoke-token {
+  display: inline;
+  white-space: pre-wrap;
+  transition: color 40ms linear;
+  border-radius: 2px;
+}
+
+.diag-karaoke-token:hover {
+  text-decoration: underline;
+  text-decoration-color: rgba(251, 191, 36, 0.6);
+}
+
+.diag-karaoke-token.is-passed {
+  color: #fbbf24;
+}
+
+.diag-karaoke-token.is-active {
+  text-shadow: 0 0 10px rgba(251, 191, 36, 0.25);
+}
+
+.timeline-lanes-container {
+  position: relative;
+}
+
+.diag-playhead-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #fbbf24;
+  box-shadow: 0 0 6px rgba(251, 191, 36, 0.8);
+  pointer-events: none;
+  z-index: 5;
 }
 
 .text-hanzi {

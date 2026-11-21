@@ -1,4 +1,4 @@
-import { LyricsCandidate, LyricsValidation, ProjectData, ProjectMetadata, ProjectSummary, ScriptDistribution } from './types';
+import { AlignmentMethodOption, LyricsCandidate, LyricsValidation, ProjectData, ProjectMetadata, ProjectSummary, ScriptDistribution } from './types';
 
 export async function fetchProjects(): Promise<ProjectSummary[]> {
   const res = await fetch('/api/projects');
@@ -231,7 +231,7 @@ export function subscribeRenderSSE(
 export async function realignLine(
   vid: string,
   lineIdx: number,
-  options?: { ignore_lrc_end_cap?: boolean; snap_to_islands?: boolean }
+  options?: { method?: AlignmentMethodOption; ignore_lrc_end_cap?: boolean; snap_to_islands?: boolean }
 ): Promise<{ ok: boolean; line: any; lint: any }> {
   const res = await fetch(`/api/project/${encodeURIComponent(vid)}/realign-line`, {
     method: 'POST',
