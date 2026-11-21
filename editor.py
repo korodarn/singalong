@@ -579,14 +579,20 @@ class EditorRequestHandler(BaseHTTPRequestHandler):
                 else (lines[line_idx + 1]["start"] if line_idx + 1 < len(lines) else ln.get("end", 0) + 4000)
             )
 
-            if options.get("ignore_lrc_end_cap"):
-                nom_e = max(nom_e + 2500, ln.get("end", 0) + 2500)
+            custom_s = options.get("start_ms")
+            custom_e = options.get("end_ms")
+            if custom_s is not None and custom_e is not None and int(custom_e) > int(custom_s) + 150:
+                loc_s, loc_e = int(custom_s), int(custom_e)
+                lead_breath = 0
+            else:
+                if options.get("ignore_lrc_end_cap"):
+                    nom_e = max(nom_e + 2500, ln.get("end", 0) + 2500)
+                adj_s, lead_breath = analyzer.find_voiced_attack(nom_s)
+                elastic_e, _ = analyzer.find_elastic_inter_line_boundary(nom_e)
+                asr_raw = orig_diag.get("asr_raw_tokens") or []
+                loc_s, loc_e = localize_line_window(adj_s, elastic_e, toks, asr_raw, analyzer)
 
-            adj_s, lead_breath = analyzer.find_voiced_attack(nom_s)
-            elastic_e, _ = analyzer.find_elastic_inter_line_boundary(nom_e)
             asr_raw = orig_diag.get("asr_raw_tokens") or []
-            loc_s, loc_e = localize_line_window(adj_s, elastic_e, toks, asr_raw, analyzer)
-
             is_ja = any(has_kana(t.get("text", "")) for t in toks)
             req_method = options.get("method", "auto")
             tok_list, method = align_line_with_method(

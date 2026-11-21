@@ -926,6 +926,24 @@ def forced_align_with_mms(
                 sustain_ext = curr_e - orig_end
                 w_end_ms = curr_e
 
+        # For the final token, prevent CTC from bridging across a real silence trough into the next line
+        if idx == m - 1 and analyzer.rms_db is not None and w_end_ms - w_start_ms > 450:
+            s_scan = analyzer._idx(w_start_ms + 200)
+            e_scan = analyzer._idx(w_end_ms)
+            if e_scan > s_scan + 25:
+                sub_rms = analyzer.rms_db[s_scan:e_scan]
+                quiet_run = 0
+                for k_f, db_val in enumerate(sub_rms):
+                    if db_val < -33.0:
+                        quiet_run += 1
+                        if quiet_run >= 24:  # >= 240ms of silence/breath trough
+                            trough_start_ms = (s_scan + k_f - quiet_run + 1) * analyzer.frame_ms
+                            if trough_start_ms >= w_start_ms + 220:
+                                w_end_ms = min(w_end_ms, trough_start_ms + 60)
+                            break
+                    else:
+                        quiet_run = 0
+
         tok_rms = analyzer.mean_db(w_start_ms, w_end_ms)
         ons_val = float(analyzer.onset[analyzer._idx(w_start_ms)]) if analyzer.onset is not None else 1.0
 
@@ -1023,6 +1041,47 @@ def localize_line_window(
     return int(win_s), int(win_e)
 
 
+def _score_alignment_acoustic_sanity(
+    toks: list[dict],
+    span_s: int,
+    span_e: int,
+    analyzer: VocalAnalyzer,
+) -> float:
+    """
+    Score an aligned token sequence (0..100) based on acoustic coverage and duration sanity,
+    used to pick between MMS-FA and Qwen3-FA when CTC confidence is low on singing vocals.
+    """
+    if not toks:
+        return 0.0
+    score = 100.0
+    m = len(toks)
+
+    # 1. Penalize skipping loud voiced singing at the start of the localized window
+    if analyzer.rms_db is not None and toks[0]["start"] > span_s + 240:
+        lead_gap = toks[0]["start"] - span_s
+        lead_db = analyzer.mean_db(span_s, toks[0]["start"])
+        if lead_db > -22.0:
+            score -= 22.0 + 18.0 * min(2.0, lead_gap / 500.0)
+
+    # 2. Penalize words stranded in silence well below the line's vocal level
+    rms_vals = [float(t.get("diag", {}).get("rms_db", analyzer.mean_db(t["start"], t["end"]))) for t in toks]
+    med_rms = float(np.median(rms_vals)) if rms_vals else -20.0
+    for idx, (t, t_db) in enumerate(zip(toks, rms_vals)):
+        if t_db < med_rms - 14.0 and t_db < -28.0:
+            score -= 30.0 if idx == m - 1 else 20.0
+
+    # 3. Penalize short function words stretched implausibly long when not the final word
+    for idx, t in enumerate(toks[:-1]):
+        dur = t["end"] - t["start"]
+        w_low = t.get("text", "").lower().strip(".,!?;:'\"")
+        if w_low in SHORT_FUNC_WORDS and dur > 650:
+            score -= 22.0 * min(2.0, (dur - 650) / 400.0)
+        elif dur <= 80 and w_low not in SHORT_FUNC_WORDS:
+            score -= 6.0
+
+    return max(0.0, score)
+
+
 def align_line_with_method(
     words: list[dict],
     span_s: int,
@@ -1101,11 +1160,19 @@ def align_line_with_method(
     if mms_ok and mms_mean >= 0.14:
         return _copy_comments(mms_toks), "mms_fa_ctc"
 
-    # Otherwise try Qwen3-ForcedAligner (stronger acoustic/semantic grounding on tough singing lines)
+    # Otherwise try Qwen3-ForcedAligner and compare acoustic sanity against MMS-FA
     if is_qwen3_available():
         q_toks = forced_align_with_qwen3(words, span_s, span_e, analyzer, lang=lang, is_ja=is_ja, device=dev)
         if q_toks and len(q_toks) == len(words):
-            return _copy_comments(q_toks), "qwen3_fa"
+            if not mms_ok:
+                return _copy_comments(q_toks), "qwen3_fa"
+            mms_sanity = _score_alignment_acoustic_sanity(mms_toks, span_s, span_e, analyzer)
+            q_sanity = _score_alignment_acoustic_sanity(q_toks, span_s, span_e, analyzer)
+            # Small preference for Qwen3 when MMS CTC is very low (<0.08) and both are acoustically sound
+            q_bonus = 5.0 if mms_mean < 0.08 else 0.0
+            if q_sanity + q_bonus >= mms_sanity:
+                return _copy_comments(q_toks), "qwen3_fa"
+            return _copy_comments(mms_toks), "mms_fa_ctc"
 
     # Fall back to sane low-CTC MMS-FA if available
     if mms_ok:

@@ -1,6 +1,6 @@
 import { Component, createSignal, For, Show, createMemo } from 'solid-js';
 import { store, fmtMs } from '../state/store';
-import { realignLine, purgeWork } from '../api';
+import { realignLine, purgeWork, saveProject } from '../api';
 import { AlignmentMethodOption, Line, Token } from '../types';
 
 const METHOD_OPTIONS: { value: AlignmentMethodOption; label: string }[] = [
@@ -33,11 +33,114 @@ export const DiagnosticsWindow: Component<{
   const [sortMode, setSortMode] = createSignal<'timeline' | 'confidence'>('timeline');
   const [realigningLineIdx, setRealigningLineIdx] = createSignal<number | null>(null);
   const [selectedMethods, setSelectedMethods] = createSignal<Record<number, AlignmentMethodOption>>({});
+  const [customWindows, setCustomWindows] = createSignal<Record<number, { start: number; end: number }>>({});
   const [expandedIndices, setExpandedIndices] = createSignal<Set<number>>(new Set([store.activeLineIdx()]));
 
   const getLineMethod = (lineIdx: number): AlignmentMethodOption => selectedMethods()[lineIdx] ?? 'auto';
   const setLineMethod = (lineIdx: number, m: AlignmentMethodOption) => {
     setSelectedMethods((prev) => ({ ...prev, [lineIdx]: m }));
+  };
+
+  const persistLines = async (updatedLines: Line[], toastMsg?: string) => {
+    store.setLines(updatedLines);
+    const vid = store.currentVid();
+    if (!vid) return;
+    try {
+      await saveProject(vid, updatedLines);
+      if (toastMsg) store.addToast(toastMsg);
+    } catch (e: any) {
+      store.addToast(`Save failed: ${e.message}`);
+    }
+  };
+
+  const nudgeLine = (lineIdx: number, deltaMs: number) => {
+    const lns = store.lines().map((ln, idx) => {
+      if (idx !== lineIdx) return ln;
+      const newTokens = ln.tokens.map((t) => ({
+        ...t,
+        start: Math.max(0, t.start + deltaMs),
+        end: Math.max(60, t.end + deltaMs),
+      }));
+      const activeToks = newTokens.filter((t) => !t.is_deleted);
+      const newStart = activeToks.length ? activeToks[0].start : Math.max(0, ln.start + deltaMs);
+      const newEnd = activeToks.length ? activeToks[activeToks.length - 1].end : Math.max(60, ln.end + deltaMs);
+      const nextDiag = ln.diag
+        ? {
+            ...ln.diag,
+            shift_from_lrc_start_ms:
+              ln.diag.lrc_nominal_start !== undefined ? newStart - ln.diag.lrc_nominal_start : ln.diag.shift_from_lrc_start_ms,
+            shift_from_lrc_end_ms:
+              ln.diag.lrc_nominal_end !== undefined ? newEnd - ln.diag.lrc_nominal_end : ln.diag.shift_from_lrc_end_ms,
+          }
+        : undefined;
+      return { ...ln, start: newStart, end: newEnd, tokens: newTokens, diag: nextDiag };
+    });
+    persistLines(lns, `Shifted Line #${lineIdx + 1} by ${deltaMs > 0 ? '+' : ''}${deltaMs}ms`);
+  };
+
+  const startTokenEdgeDrag = (
+    e: MouseEvent,
+    lineIdx: number,
+    tokIdx: number,
+    edge: 'start' | 'end',
+    laneEl: HTMLDivElement,
+    minTime: number,
+    spanDuration: number
+  ) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const rect = laneEl.getBoundingClientRect();
+    if (rect.width <= 0) return;
+
+    const onMove = (ev: MouseEvent) => {
+      const pct = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+      const newMs = Math.round((minTime + pct * spanDuration) / 10) * 10;
+      const current = store.lines();
+      const ln = current[lineIdx];
+      if (!ln) return;
+
+      const tokens = ln.tokens.map((t) => ({ ...t }));
+      const tok = tokens[tokIdx];
+      if (!tok) return;
+
+      // Find previous & next non-deleted neighbors for clamping
+      let prevEnd = 0;
+      for (let k = tokIdx - 1; k >= 0; k--) {
+        if (!tokens[k].is_deleted) {
+          prevEnd = tokens[k].end;
+          break;
+        }
+      }
+      let nextStart = Number.MAX_SAFE_INTEGER;
+      for (let k = tokIdx + 1; k < tokens.length; k++) {
+        if (!tokens[k].is_deleted) {
+          nextStart = tokens[k].start;
+          break;
+        }
+      }
+
+      if (edge === 'start') {
+        tok.start = Math.max(prevEnd, Math.min(tok.end - 60, newMs));
+      } else {
+        tok.end = Math.min(nextStart, Math.max(tok.start + 60, newMs));
+      }
+
+      const activeToks = tokens.filter((t) => !t.is_deleted);
+      const newStart = activeToks.length ? activeToks[0].start : ln.start;
+      const newEnd = activeToks.length ? activeToks[activeToks.length - 1].end : ln.end;
+      const nextLines = [...current];
+      nextLines[lineIdx] = { ...ln, start: newStart, end: newEnd, tokens };
+      store.setLines(nextLines);
+    };
+
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      persistLines(store.lines());
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
   };
 
   const lines = () => store.lines();
@@ -104,13 +207,21 @@ export const DiagnosticsWindow: Component<{
     else store.sendStageCommand({ type: 'cmd_seek_ms', ms: Math.max(0, startMs - 200) });
   };
 
-  const handleRealign = async (lineIdx: number, ignoreEndCap = false) => {
+  const handleRealign = async (
+    lineIdx: number,
+    ignoreEndCap = false,
+    customBounds?: { start_ms: number; end_ms: number }
+  ) => {
     const vid = store.currentVid();
     if (!vid) return;
     const method = getLineMethod(lineIdx);
     setRealigningLineIdx(lineIdx);
     try {
-      const res = await realignLine(vid, lineIdx, { method, ignore_lrc_end_cap: ignoreEndCap });
+      const res = await realignLine(vid, lineIdx, {
+        method,
+        ignore_lrc_end_cap: ignoreEndCap,
+        ...(customBounds || {}),
+      });
       if (res.ok) {
         const lns = [...store.lines()];
         lns[lineIdx] = res.line;
@@ -477,8 +588,61 @@ export const DiagnosticsWindow: Component<{
                   </div>
                 </Show>
 
-                {/* Accordion Content: 4-Lane Mini-Timeline */}
+                {/* Accordion Content: Inline Timing Controls + 4-Lane Mini-Timeline */}
                 <Show when={isExpanded()}>
+                  <div class="diag-inline-adjust-bar" onClick={(e) => e.stopPropagation()}>
+                    <div class="adjust-group">
+                      <span class="adjust-label">Shift Line:</span>
+                      <button class="btn btn-xs btn-subtle" onClick={() => nudgeLine(item.idx, -200)} title="Shift entire line earlier by 200ms">-200ms</button>
+                      <button class="btn btn-xs btn-subtle" onClick={() => nudgeLine(item.idx, -50)} title="Shift entire line earlier by 50ms">-50ms</button>
+                      <button class="btn btn-xs btn-subtle" onClick={() => nudgeLine(item.idx, 50)} title="Shift entire line later by 50ms">+50ms</button>
+                      <button class="btn btn-xs btn-subtle" onClick={() => nudgeLine(item.idx, 200)} title="Shift entire line later by 200ms">+200ms</button>
+                    </div>
+                    <div class="adjust-group">
+                      <span class="adjust-label">Realign Window (ms):</span>
+                      <input
+                        type="number"
+                        step="50"
+                        class="window-ms-input"
+                        value={customWindows()[item.idx]?.start ?? Math.min(line.start, nomS)}
+                        onInput={(e) => {
+                          const v = parseInt(e.currentTarget.value, 10);
+                          if (!Number.isNaN(v)) {
+                            const cur = customWindows()[item.idx] ?? { start: Math.min(line.start, nomS), end: Math.max(line.end, nomE) };
+                            setCustomWindows({ ...customWindows(), [item.idx]: { ...cur, start: Math.max(0, v) } });
+                          }
+                        }}
+                        title="Custom window start (ms) for re-alignment"
+                      />
+                      <span class="adjust-sep">–</span>
+                      <input
+                        type="number"
+                        step="50"
+                        class="window-ms-input"
+                        value={customWindows()[item.idx]?.end ?? Math.max(line.end, nomE)}
+                        onInput={(e) => {
+                          const v = parseInt(e.currentTarget.value, 10);
+                          if (!Number.isNaN(v)) {
+                            const cur = customWindows()[item.idx] ?? { start: Math.min(line.start, nomS), end: Math.max(line.end, nomE) };
+                            setCustomWindows({ ...customWindows(), [item.idx]: { ...cur, end: Math.max(0, v) } });
+                          }
+                        }}
+                        title="Custom window end (ms) for re-alignment"
+                      />
+                      <button
+                        class="btn btn-xs"
+                        disabled={realigningLineIdx() === item.idx}
+                        onClick={() => {
+                          const win = customWindows()[item.idx] ?? { start: Math.min(line.start, nomS), end: Math.max(line.end, nomE) };
+                          handleRealign(item.idx, false, { start_ms: win.start, end_ms: win.end });
+                        }}
+                        title="Re-align using the selected method inside this exact [start..end] window"
+                      >
+                        ⚡ Realign Window
+                      </button>
+                    </div>
+                    <span class="adjust-hint">Tip: drag token edges below to fine-tune boundaries</span>
+                  </div>
                   <div class="diag-timeline-accordion">
                     <div class="timeline-lane-labels">
                       <div class="lane-label">Vocal Energy / Islands</div>
@@ -562,10 +726,11 @@ export const DiagnosticsWindow: Component<{
                         </Show>
                       </div>
 
-                      {/* Lane 4: Final Aligned Tokens (CTC Colored) */}
+                      {/* Lane 4: Final Aligned Tokens (CTC Colored, Draggable Edges) */}
                       <div class="timeline-lane lane-tokens">
-                        <For each={line.tokens.filter((t) => !t.is_deleted)}>
-                          {(tok) => {
+                        <For each={line.tokens}>
+                          {(tok, tokIdx) => {
+                            if (tok.is_deleted) return null;
                             const left = toPct(tok.start);
                             const width = Math.max(1.8, toPct(tok.end) - left);
                             const ctc = tok.diag?.ctc_score ?? 0.8;
@@ -576,10 +741,24 @@ export const DiagnosticsWindow: Component<{
                                 class={`token-aligned-chip ${colorClass}`}
                                 style={{ left: `${left}%`, width: `${width}%` }}
                                 onClick={() => handlePlayLine(tok.start, tok.end)}
-                                title={`'${tok.text}' [${tok.start}..${tok.end}ms] (${tok.end - tok.start}ms)\nCTC Score: ${Math.round(ctc * 100)}%\nRMS: ${tok.diag?.rms_db ?? 'N/A'} dBFS\nOnset: ${tok.diag?.onset_strength ?? 'N/A'}\nSustain Ext: +${tok.diag?.sustain_extended_ms ?? 0}ms`}
+                                title={`'${tok.text}' [${tok.start}..${tok.end}ms] (${tok.end - tok.start}ms)\nCTC Score: ${Math.round(ctc * 100)}%\nRMS: ${tok.diag?.rms_db ?? 'N/A'} dBFS\nOnset: ${tok.diag?.onset_strength ?? 'N/A'}\nSustain Ext: +${tok.diag?.sustain_extended_ms ?? 0}ms\n(Drag left/right edges to adjust)`}
                               >
+                                <span
+                                  class="token-resize-handle left"
+                                  onMouseDown={(e) => {
+                                    const lane = e.currentTarget.closest('.lane-tokens') as HTMLDivElement | null;
+                                    if (lane) startTokenEdgeDrag(e, item.idx, tokIdx(), 'start', lane, minTime, spanDuration);
+                                  }}
+                                />
                                 <span class="chip-txt">{tok.text}</span>
                                 <span class="chip-ctc">{Math.round(ctc * 100)}%</span>
+                                <span
+                                  class="token-resize-handle right"
+                                  onMouseDown={(e) => {
+                                    const lane = e.currentTarget.closest('.lane-tokens') as HTMLDivElement | null;
+                                    if (lane) startTokenEdgeDrag(e, item.idx, tokIdx(), 'end', lane, minTime, spanDuration);
+                                  }}
+                                />
                               </div>
                             );
                           }}

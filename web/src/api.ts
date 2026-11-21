@@ -231,7 +231,13 @@ export function subscribeRenderSSE(
 export async function realignLine(
   vid: string,
   lineIdx: number,
-  options?: { method?: AlignmentMethodOption; ignore_lrc_end_cap?: boolean; snap_to_islands?: boolean }
+  options?: {
+    method?: AlignmentMethodOption;
+    ignore_lrc_end_cap?: boolean;
+    snap_to_islands?: boolean;
+    start_ms?: number;
+    end_ms?: number;
+  }
 ): Promise<{ ok: boolean; line: any; lint: any }> {
   const res = await fetch(`/api/project/${encodeURIComponent(vid)}/realign-line`, {
     method: 'POST',
